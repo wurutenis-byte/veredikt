@@ -184,7 +184,7 @@ const pb = {
   },
 
   async recalcTopic(topicId) {
-    const votes = await this.get(`collections/votes/records?filter=${encodeURIComponent(`topic="${topicId"`)}&perPage=500`);
+    const votes = await this.get(`collections/votes/records?filter=${encodeURIComponent(`topic="${topicId}"`)}&perPage=500`);
     // Note: recalc is done server-side via PocketBase hooks in production
     // Here we just return the updated topic
     return await this.getTopic(topicId);
@@ -769,4 +769,21 @@ async function init() {
   });
 }
 
-document.addEventListener('DOMContentLoaded', init);
+document.addEventListener('DOMContentLoaded', () => {
+  init();
+
+  // Sobrescribir showPage para poblar el perfil
+  const _origShowPage = showPage;
+  window.showPage = function(page) {
+    _origShowPage(page);
+    if (page === 'profile' && state.user) {
+      const initials = (state.user.name || '?').slice(0, 2).toUpperCase();
+      const el = document.getElementById('profile-avatar');
+      const nameEl  = document.getElementById('profile-name');
+      const emailEl = document.getElementById('profile-email');
+      if (el)      el.textContent = initials;
+      if (nameEl)  nameEl.textContent  = state.user.name  || 'Sin nombre';
+      if (emailEl) emailEl.textContent = state.user.email || '';
+    }
+  };
+});

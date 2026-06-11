@@ -4,9 +4,9 @@
 // Requiere: PocketBase corriendo en http://127.0.0.1:8090
 //           y haber creado cuenta admin
 
-const PB_URL   = 'http://127.0.0.1:8090';
-const ADMIN_EMAIL    = process.env.PB_ADMIN_EMAIL    || 'admin@veredikt.com';
-const ADMIN_PASSWORD = process.env.PB_ADMIN_PASSWORD || 'TU_PASSWORD_ADMIN';
+const PB_URL   = 'https://veredikt-production.up.railway.app';
+const ADMIN_EMAIL    = process.env.PB_ADMIN_EMAIL    || 'wurutenis@gmail.com';
+const ADMIN_PASSWORD = process.env.PB_ADMIN_PASSWORD || 'g$xXr22;U*mG?y+';
 
 const CATEGORIES = [
   { name: 'Política',        icon: '🏛️',  order: 1 },
