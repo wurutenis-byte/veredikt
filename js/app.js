@@ -1,9 +1,8 @@
 // ─── CONFIG ──────────────────────────────────────────────────
 // En Railway, el frontend Y PocketBase corren en el mismo origen.
 // window.location.origin funciona automáticamente en cualquier dominio.
-const PB_URL = window.location.hostname === 'localhost'
-  ? 'http://127.0.0.1:8090'
-  : window.location.origin;
+const SUPABASE_URL      = 'https://qnzlmgqchmffnrlfljrf.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_fioeWGpnQ-2eSkn_VhivIA_K8O_iMKN';
 
 // ─── STATE ───────────────────────────────────────────────────
 const state = {
