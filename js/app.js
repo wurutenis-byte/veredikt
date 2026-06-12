@@ -1,12 +1,17 @@
 // ─── CONFIG ──────────────────────────────────────────────────
-// En Railway, el frontend Y PocketBase corren en el mismo origen.
-// window.location.origin funciona automáticamente en cualquier dominio.
+// ⚠️ RELLENA ESTOS DOS VALORES con los de tu proyecto Supabase
+// (Supabase Dashboard → Settings → API)
 const SUPABASE_URL      = 'https://qnzlmgqchmffnrlfljrf.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_fioeWGpnQ-2eSkn_VhivIA_K8O_iMKN';
+
+// ─── SUPABASE CLIENT ────────────────────────────────────────
+// Cargado vía CDN en index.html como `window.supabase`
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ─── STATE ───────────────────────────────────────────────────
 const state = {
   user: null,
+  profile: null,
   currentCategory: 'all',
   currentSort: 'trending',
   topics: [],
@@ -16,123 +21,160 @@ const state = {
   openTopic: null,
 };
 
-// ─── PocketBase API helpers ───────────────────────────────────
-const pb = {
-  token: () => localStorage.getItem('pb_token'),
-
-  headers(extra = {}) {
-    const h = { 'Content-Type': 'application/json', ...extra };
-    if (this.token()) h['Authorization'] = this.token();
-    return h;
-  },
-
-  async request(method, path, body = null) {
-    const opts = { method, headers: this.headers() };
-    if (body) opts.body = JSON.stringify(body);
-    const res = await fetch(`${PB_URL}/api/${path}`, opts);
-    const data = await res.json();
-    if (!res.ok) throw data;
-    return data;
-  },
-
-  async get(path)         { return this.request('GET', path); },
-  async post(path, body)  { return this.request('POST', path, body); },
-  async patch(path, body) { return this.request('PATCH', path, body); },
-  async delete(path)      { return this.request('DELETE', path); },
-
-  // Auth
+// ─── AUTH ────────────────────────────────────────────────────
+const auth = {
   async loginWithGoogle() {
-    const res = await fetch(`${PB_URL}/api/collections/users/auth-methods`);
-    const data = await res.json();
-    const google = data.authProviders?.find(p => p.name === 'google');
-    if (!google) { toast('Google OAuth no configurado en PocketBase', 'error'); return; }
-    localStorage.setItem('pb_oauth_state', google.state);
-    localStorage.setItem('pb_oauth_verifier', google.codeVerifier);
-    window.location.href = google.authUrl + encodeURIComponent(window.location.origin + '/oauth');
+    const { error } = await sb.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: window.location.origin }
+    });
+    if (error) toast(error.message, 'error');
   },
 
   async loginWithEmail(email, password) {
-    const data = await this.post('collections/users/auth-with-password', { identity: email, password });
-    this.saveAuth(data);
+    const { data, error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) throw error;
     return data;
   },
 
   async register(email, password, name) {
-    const user = await this.post('collections/users/records', {
-      email, password, passwordConfirm: password, name, username: email.split('@')[0]
+    const { data, error } = await sb.auth.signUp({
+      email, password,
+      options: { data: { name } }
     });
-    return this.loginWithEmail(email, password);
+    if (error) throw error;
+    return data;
   },
 
-  saveAuth(data) {
-    localStorage.setItem('pb_token', data.token);
-    localStorage.setItem('pb_user', JSON.stringify(data.record));
-    state.user = data.record;
-    renderUserNav();
-  },
-
-  logout() {
-    localStorage.removeItem('pb_token');
-    localStorage.removeItem('pb_user');
+  async logout() {
+    await sb.auth.signOut();
     state.user = null;
+    state.profile = null;
     renderUserNav();
     toast('Sesión cerrada');
   },
 
-  restoreAuth() {
-    const token = localStorage.getItem('pb_token');
-    const user  = localStorage.getItem('pb_user');
-    if (token && user) {
-      state.user = JSON.parse(user);
+  async restoreSession() {
+    const { data } = await sb.auth.getSession();
+    if (data.session) {
+      state.user = data.session.user;
+      await this.loadProfile();
       renderUserNav();
     }
   },
 
-  // Collections
+  async loadProfile() {
+    if (!state.user) return;
+    const { data } = await sb
+      .from('profiles')
+      .select('*')
+      .eq('id', state.user.id)
+      .single();
+    state.profile = data;
+  },
+};
+
+// Listen for auth changes (handles OAuth redirect too)
+sb.auth.onAuthStateChange(async (event, session) => {
+  if (session) {
+    state.user = session.user;
+    await auth.loadProfile();
+  } else {
+    state.user = null;
+    state.profile = null;
+  }
+  renderUserNav();
+});
+
+// ─── DATA API ───────────────────────────────────────────────
+const api = {
   async getCategories() {
-    return this.get('collections/categories/records?sort=order&perPage=100');
+    const { data, error } = await sb
+      .from('categories')
+      .select('*')
+      .order('order', { ascending: true });
+    if (error) throw error;
+    return data;
   },
 
   async getTopics({ category = 'all', sort = 'trending', search = '', page = 1 } = {}) {
-    const filters = ['status="published"'];
-    if (category !== 'all') filters.push(`category="${category}"`);
-    if (search) filters.push(`(title~"${search}" || subtopic~"${search}")`);
-    const filter = filters.join(' && ');
-    const sortMap = { trending: '-votes_up', newest: '-created', top: '-rating_avg', controversial: '-votes_total' };
-    const sortField = sortMap[sort] || '-votes_up';
-    return this.get(`collections/topics/records?filter=${encodeURIComponent(filter)}&sort=${sortField}&page=${page}&perPage=20&expand=category`);
+    let query = sb
+      .from('topics')
+      .select('*, categories(name, icon)')
+      .eq('status', 'published');
+
+    if (category !== 'all') query = query.eq('category_id', category);
+    if (search) query = query.or(`title.ilike.%${search}%,subtopic.ilike.%${search}%`);
+
+    const sortMap = {
+      trending:      { column: 'votes_up',    ascending: false },
+      newest:        { column: 'created_at',  ascending: false },
+      top:           { column: 'rating_avg',  ascending: false },
+      controversial: { column: 'votes_total', ascending: false },
+    };
+    const s = sortMap[sort] || sortMap.trending;
+    query = query.order(s.column, { ascending: s.ascending });
+
+    const perPage = 20;
+    const from = (page - 1) * perPage;
+    query = query.range(from, from + perPage - 1);
+
+    const { data, error } = await query;
+    if (error) throw error;
+    return data;
   },
 
   async getTopic(id) {
-    return this.get(`collections/topics/records/${id}?expand=category`);
+    const { data, error } = await sb
+      .from('topics')
+      .select('*, categories(name, icon)')
+      .eq('id', id)
+      .single();
+    if (error) throw error;
+    return data;
   },
 
   async getMyVote(topicId) {
     if (!state.user) return null;
-    try {
-      const res = await this.get(`collections/votes/records?filter=${encodeURIComponent(`user="${state.user.id}" && topic="${topicId}"`)}&perPage=1`);
-      return res.items?.[0] || null;
-    } catch { return null; }
+    const { data } = await sb
+      .from('votes')
+      .select('*')
+      .eq('topic_id', topicId)
+      .eq('user_id', state.user.id)
+      .maybeSingle();
+    return data;
   },
 
   async getMyRating(topicId) {
     if (!state.user) return null;
-    try {
-      const res = await this.get(`collections/ratings/records?filter=${encodeURIComponent(`user="${state.user.id}" && topic="${topicId}"`)}&perPage=1`);
-      return res.items?.[0] || null;
-    } catch { return null; }
+    const { data } = await sb
+      .from('ratings')
+      .select('*')
+      .eq('topic_id', topicId)
+      .eq('user_id', state.user.id)
+      .maybeSingle();
+    return data;
   },
 
   async getMyComment(topicId) {
     if (!state.user) return null;
-    try {
-      const res = await this.get(`collections/comments/records?filter=${encodeURIComponent(`user="${state.user.id}" && topic="${topicId}"`)}&perPage=1`);
-      return res.items?.[0] || null;
-    } catch { return null; }
+    const { data } = await sb
+      .from('comments')
+      .select('*')
+      .eq('topic_id', topicId)
+      .eq('user_id', state.user.id)
+      .maybeSingle();
+    return data;
   },
 
   async getComments(topicId) {
-    return this.get(`collections/comments/records?filter=${encodeURIComponent(`topic="${topicId}"`)}&sort=-created&expand=user&perPage=50`);
+    const { data, error } = await sb
+      .from('comments')
+      .select('*, profiles(name)')
+      .eq('topic_id', topicId)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return data;
   },
 
   async vote(topicId, value) {
@@ -140,78 +182,71 @@ const pb = {
     const existing = await this.getMyVote(topicId);
     if (existing) {
       if (existing.value === value) {
-        await this.delete(`collections/votes/records/${existing.id}`);
+        await sb.from('votes').delete().eq('id', existing.id);
         toast('Voto retirado');
       } else {
-        await this.patch(`collections/votes/records/${existing.id}`, { value });
+        await sb.from('votes').update({ value }).eq('id', existing.id);
         toast('Voto actualizado');
       }
     } else {
-      await this.post('collections/votes/records', { user: state.user.id, topic: topicId, value });
+      const { error } = await sb.from('votes').insert({ user_id: state.user.id, topic_id: topicId, value });
+      if (error) { toast(error.message, 'error'); return; }
       toast('¡Votado!', 'success');
     }
-    return await this.recalcTopic(topicId);
   },
 
   async rate(topicId, value) {
     if (!state.user) { openAuthModal(); return; }
     const existing = await this.getMyRating(topicId);
     if (existing) {
-      await this.patch(`collections/ratings/records/${existing.id}`, { value });
+      await sb.from('ratings').update({ value }).eq('id', existing.id);
       toast('Valoración actualizada');
     } else {
-      await this.post('collections/ratings/records', { user: state.user.id, topic: topicId, value });
+      const { error } = await sb.from('ratings').insert({ user_id: state.user.id, topic_id: topicId, value });
+      if (error) { toast(error.message, 'error'); return; }
       toast('¡Valorado!', 'success');
     }
-    return await this.recalcTopic(topicId);
   },
 
   async comment(topicId, text) {
     if (!state.user) { openAuthModal(); return; }
     const existing = await this.getMyComment(topicId);
     if (existing) { toast('Ya has comentado en este tema', 'error'); return null; }
-    const comment = await this.post('collections/comments/records', {
-      user: state.user.id, topic: topicId, text
-    });
-    // Update comment count
-    const topic = await this.getTopic(topicId);
-    await this.patch(`collections/topics/records/${topicId}`, {
-      comments_count: (topic.comments_count || 0) + 1
-    });
+    const { error } = await sb.from('comments').insert({ user_id: state.user.id, topic_id: topicId, text });
+    if (error) { toast(error.message, 'error'); return null; }
     toast('Comentario publicado', 'success');
-    return comment;
   },
 
-  async recalcTopic(topicId) {
-    const votes = await this.get(`collections/votes/records?filter=${encodeURIComponent(`topic="${topicId}"`)}&perPage=500`);
-    // Note: recalc is done server-side via PocketBase hooks in production
-    // Here we just return the updated topic
-    return await this.getTopic(topicId);
-  },
-
-  async proposeTopic(data) {
+  async proposeTopic({ title, category, subtopic, description }) {
     if (!state.user) { openAuthModal(); return; }
-    return this.post('collections/topics/records', {
-      ...data,
-      author: state.user.id,
+    const { error } = await sb.from('topics').insert({
+      title, subtopic, description,
+      category_id: category,
+      author_id: state.user.id,
       status: 'pending',
-      votes_up: 0, votes_down: 0, votes_total: 0,
-      rating_avg: 0, rating_count: 0,
-      comments_count: 0
     });
+    if (error) throw error;
   },
 
   // Admin
   async getPendingTopics() {
-    return this.get(`collections/topics/records?filter=${encodeURIComponent('status="pending"')}&sort=-created&perPage=100`);
+    const { data, error } = await sb
+      .from('topics')
+      .select('*, categories(name)')
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return data;
   },
 
   async approveTopic(id) {
-    return this.patch(`collections/topics/records/${id}`, { status: 'published' });
+    const { error } = await sb.from('topics').update({ status: 'published' }).eq('id', id);
+    if (error) throw error;
   },
 
   async rejectTopic(id) {
-    return this.delete(`collections/topics/records/${id}`);
+    const { error } = await sb.from('topics').delete().eq('id', id);
+    if (error) throw error;
   },
 };
 
@@ -220,17 +255,16 @@ function renderUserNav() {
   const navRight = document.getElementById('nav-right');
   if (!navRight) return;
   if (state.user) {
-    const initials = (state.user.name || state.user.email || '?').slice(0, 2).toUpperCase();
+    const name = state.profile?.name || state.user.email || '?';
+    const initials = name.slice(0, 2).toUpperCase();
     navRight.innerHTML = `
       <div class="user-avatar" onclick="toggleUserMenu()" id="user-avatar-btn">
-        ${state.user.avatarUrl
-          ? `<img src="${state.user.avatarUrl}" style="width:100%;height:100%;border-radius:50%;object-fit:cover">`
-          : initials}
+        ${initials}
         <div class="user-menu" id="user-menu">
           <a onclick="showPage('profile')">Mi perfil</a>
-          ${state.user.isAdmin ? `<a onclick="showPage('admin')">Panel admin</a>` : ''}
+          ${state.profile?.is_admin ? `<a onclick="showPage('admin')">Panel admin</a>` : ''}
           <div class="divider"></div>
-          <a onclick="pb.logout()">Cerrar sesión</a>
+          <a onclick="auth.logout()">Cerrar sesión</a>
         </div>
       </div>`;
   } else {
@@ -255,24 +289,24 @@ function timeAgo(dateStr) {
 
 function renderTopicCard(topic) {
   const up = pctUp(topic);
-  const rating = topic.rating_avg ? topic.rating_avg.toFixed(1) : '—';
-  const catName = topic.expand?.category?.name || topic.category || '';
+  const rating = topic.rating_avg ? Number(topic.rating_avg).toFixed(1) : '—';
+  const catName = topic.categories?.name || '';
   return `
     <div class="topic-card" onclick="openTopicModal('${topic.id}')">
       <div class="card-meta">
         <span class="card-cat-badge">${catName}</span>
         ${topic.subtopic ? `<span style="color:var(--small)">› ${topic.subtopic}</span>` : ''}
-        <span style="margin-left:auto">${timeAgo(topic.created)}</span>
+        <span style="margin-left:auto">${timeAgo(topic.created_at)}</span>
       </div>
       <div class="card-title">${topic.title}</div>
       <div class="card-actions">
-        <button class="vote-btn up" onclick="event.stopPropagation(); quickVote('${topic.id}', 'up', this)">
+        <button class="vote-btn up" onclick="event.stopPropagation(); quickVote('${topic.id}', 'up')">
           👍 ${topic.votes_up || 0}
         </button>
         <div class="vote-bar">
           <div class="vote-bar-fill" style="width:${up}%"></div>
         </div>
-        <button class="vote-btn down" onclick="event.stopPropagation(); quickVote('${topic.id}', 'down', this)">
+        <button class="vote-btn down" onclick="event.stopPropagation(); quickVote('${topic.id}', 'down')">
           👎 ${topic.votes_down || 0}
         </button>
       </div>
@@ -293,23 +327,21 @@ function renderCategories(categories) {
     <li class="cat-item">
       <a href="#" class="${state.currentCategory === 'all' ? 'active' : ''}" onclick="filterCategory('all', event)">
         <span class="cat-icon">🌐</span> Todo
-        <span class="cat-count">${state.topics.length}</span>
       </a>
     </li>`;
   const items = categories.map(c => `
     <li class="cat-item">
       <a href="#" class="${state.currentCategory === c.id ? 'active' : ''}" onclick="filterCategory('${c.id}', event)">
         <span class="cat-icon">${c.icon || '📂'}</span> ${c.name}
-        <span class="cat-count">${c.topics_count || ''}</span>
       </a>
     </li>`).join('');
   list.innerHTML = all + items;
 }
 
-function renderTopics(topics, append = false) {
+function renderTopics(topics) {
   const grid = document.getElementById('topics-grid');
   if (!grid) return;
-  if (topics.length === 0 && !append) {
+  if (topics.length === 0) {
     grid.innerHTML = `
       <div class="empty-state" style="grid-column:1/-1">
         <div class="empty-icon">🔍</div>
@@ -318,9 +350,7 @@ function renderTopics(topics, append = false) {
       </div>`;
     return;
   }
-  const html = topics.map(renderTopicCard).join('');
-  if (append) grid.innerHTML += html;
-  else grid.innerHTML = html;
+  grid.innerHTML = topics.map(renderTopicCard).join('');
 }
 
 function showSkeletons() {
@@ -330,79 +360,70 @@ function showSkeletons() {
 }
 
 // ─── DATA LOADING ─────────────────────────────────────────────
-async function loadTopics(append = false) {
+async function loadTopics() {
   if (state.loading) return;
   state.loading = true;
-  if (!append) showSkeletons();
+  showSkeletons();
   try {
-    const res = await pb.getTopics({
+    const topics = await api.getTopics({
       category: state.currentCategory,
       sort: state.currentSort,
       search: document.getElementById('search-input')?.value || '',
       page: state.page,
     });
-    const newTopics = res.items || [];
-    if (append) state.topics = [...state.topics, ...newTopics];
-    else state.topics = newTopics;
-    renderTopics(state.topics, false);
+    state.topics = topics || [];
+    renderTopics(state.topics);
     updateTicker();
   } catch (e) {
     console.error(e);
-    if (!append) renderTopicsError();
+    renderTopicsError(e);
   } finally {
     state.loading = false;
   }
 }
 
-function renderTopicsError() {
+function renderTopicsError(e) {
   const grid = document.getElementById('topics-grid');
   if (grid) grid.innerHTML = `
     <div class="empty-state" style="grid-column:1/-1">
       <div class="empty-icon">⚠️</div>
-      <h3>No se pudo conectar</h3>
-      <p>Verifica que PocketBase está corriendo en <strong>${PB_URL}</strong></p>
+      <h3>No se pudo conectar con Supabase</h3>
+      <p>${e?.message || 'Verifica SUPABASE_URL y SUPABASE_ANON_KEY en app.js'}</p>
     </div>`;
 }
 
 async function loadCategories() {
   try {
-    const res = await pb.getCategories();
-    state.categories = res.items || [];
+    state.categories = await api.getCategories();
     renderCategories(state.categories);
     populateCategorySelects();
-  } catch {
+  } catch (e) {
+    console.error('Error loading categories:', e);
     state.categories = [];
   }
 }
 
 function populateCategorySelects() {
-  ['propose-category', 'admin-category-filter'].forEach(id => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.innerHTML = `<option value="">Selecciona categoría</option>` +
-      state.categories.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
-  });
+  const el = document.getElementById('propose-category');
+  if (!el) return;
+  el.innerHTML = `<option value="">Selecciona categoría</option>` +
+    state.categories.map(c => `<option value="${c.id}">${c.icon} ${c.name}</option>`).join('');
 }
 
 function updateTicker() {
   const track = document.getElementById('ticker-track');
   if (!track || !state.topics.length) return;
   const items = [...state.topics, ...state.topics].map(t =>
-    `<span class="ticker-item"><strong>${t.title}</strong> 👍${t.votes_up || 0} · ⭐${t.rating_avg?.toFixed(1) || '—'}</span>`
+    `<span class="ticker-item"><strong>${t.title}</strong> 👍${t.votes_up || 0} · ⭐${t.rating_avg ? Number(t.rating_avg).toFixed(1) : '—'}</span>`
   ).join('');
   track.innerHTML = items;
 }
 
 // ─── INTERACTIONS ─────────────────────────────────────────────
-async function quickVote(topicId, value, btn) {
+async function quickVote(topicId, value) {
   if (!state.user) { openAuthModal(); return; }
-  btn.style.opacity = '0.5';
-  try {
-    await pb.vote(topicId, value);
-    await loadTopics();
-  } finally {
-    btn.style.opacity = '1';
-  }
+  await api.vote(topicId, value);
+  await loadTopics();
 }
 
 // ─── MODAL ───────────────────────────────────────────────────
@@ -411,29 +432,28 @@ async function openTopicModal(topicId) {
   overlay.classList.add('open');
   document.body.style.overflow = 'hidden';
 
-  // Loading state
   document.getElementById('modal-content').innerHTML = `
     <div style="text-align:center;padding:3rem;color:var(--muted)">Cargando...</div>`;
 
   try {
     const [topic, comments, myVote, myRating, myComment] = await Promise.all([
-      pb.getTopic(topicId),
-      pb.getComments(topicId),
-      pb.getMyVote(topicId),
-      pb.getMyRating(topicId),
-      pb.getMyComment(topicId),
+      api.getTopic(topicId),
+      api.getComments(topicId),
+      api.getMyVote(topicId),
+      api.getMyRating(topicId),
+      api.getMyComment(topicId),
     ]);
     state.openTopic = topic;
-    renderTopicModal(topic, comments.items || [], myVote, myRating, myComment);
+    renderTopicModal(topic, comments || [], myVote, myRating, myComment);
   } catch (e) {
     document.getElementById('modal-content').innerHTML = `
-      <p style="color:var(--down)">Error al cargar el tema.</p>`;
+      <p style="color:var(--down)">Error al cargar el tema: ${e.message || e}</p>`;
   }
 }
 
 function renderTopicModal(topic, comments, myVote, myRating, myComment) {
   const up = pctUp(topic);
-  const catName = topic.expand?.category?.name || topic.category || '';
+  const catName = topic.categories?.name || '';
   const myRatingVal = myRating?.value || 5;
   const hasVotedUp   = myVote?.value === 'up';
   const hasVotedDown = myVote?.value === 'down';
@@ -446,7 +466,7 @@ function renderTopicModal(topic, comments, myVote, myRating, myComment) {
     <div class="modal-meta">
       <span class="card-cat-badge">${catName}</span>
       ${topic.subtopic ? `<span class="card-cat-badge">${topic.subtopic}</span>` : ''}
-      <span style="font-size:0.78rem;color:var(--small)">${timeAgo(topic.created)}</span>
+      <span style="font-size:0.78rem;color:var(--small)">${timeAgo(topic.created_at)}</span>
     </div>
     ${topic.description ? `<p style="color:var(--muted);font-size:0.92rem;margin-bottom:1.5rem;line-height:1.6">${topic.description}</p>` : ''}
 
@@ -473,7 +493,7 @@ function renderTopicModal(topic, comments, myVote, myRating, myComment) {
     <!-- VALORAR -->
     <div class="modal-section">
       <div class="modal-section-label">
-        Valora del 1 al 10 
+        Valora del 1 al 10
         ${myRating ? '· <span style="color:var(--up)">Ya valorado</span>' : ''}
       </div>
       <div style="display:flex;align-items:center;gap:1rem;">
@@ -487,7 +507,7 @@ function renderTopicModal(topic, comments, myVote, myRating, myComment) {
       </button>
       <div class="rating-avg-display">
         <div class="rating-avg-big" id="modal-rating-avg">
-          ${topic.rating_avg ? topic.rating_avg.toFixed(1) : '—'}
+          ${topic.rating_avg ? Number(topic.rating_avg).toFixed(1) : '—'}
         </div>
         <div>
           <div style="font-size:0.85rem;color:var(--text);font-weight:600">/10 media</div>
@@ -514,9 +534,9 @@ function renderTopicModal(topic, comments, myVote, myRating, myComment) {
           : comments.map(c => `
             <div class="comment-item">
               <div class="comment-author">
-                <div class="comment-avatar">${(c.expand?.user?.name || '?').slice(0,2).toUpperCase()}</div>
-                <span class="comment-name">${c.expand?.user?.name || 'Usuario'}</span>
-                <span class="comment-date">${timeAgo(c.created)}</span>
+                <div class="comment-avatar">${(c.profiles?.name || '?').slice(0,2).toUpperCase()}</div>
+                <span class="comment-name">${c.profiles?.name || 'Usuario'}</span>
+                <span class="comment-date">${timeAgo(c.created_at)}</span>
               </div>
               <div class="comment-text">${c.text}</div>
             </div>`).join('')
@@ -535,7 +555,7 @@ function closeTopicModal() {
 async function modalVote(value) {
   if (!state.user) { openAuthModal(); return; }
   if (!state.openTopic) return;
-  await pb.vote(state.openTopic.id, value);
+  await api.vote(state.openTopic.id, value);
   await openTopicModal(state.openTopic.id);
   loadTopics();
 }
@@ -544,7 +564,7 @@ async function modalRate() {
   if (!state.user) { openAuthModal(); return; }
   if (!state.openTopic) return;
   const val = parseInt(document.getElementById('modal-rating-input').value);
-  await pb.rate(state.openTopic.id, val);
+  await api.rate(state.openTopic.id, val);
   await openTopicModal(state.openTopic.id);
   loadTopics();
 }
@@ -554,7 +574,7 @@ async function modalComment() {
   if (!state.openTopic) return;
   const text = document.getElementById('comment-textarea')?.value?.trim();
   if (!text) { toast('Escribe algo antes de publicar', 'error'); return; }
-  await pb.comment(state.openTopic.id, text);
+  await api.comment(state.openTopic.id, text);
   await openTopicModal(state.openTopic.id);
   loadTopics();
 }
@@ -576,9 +596,10 @@ async function submitLogin() {
   const btn = document.getElementById('login-btn');
   btn.textContent = 'Entrando...'; btn.disabled = true;
   try {
-    await pb.loginWithEmail(email, pass);
+    await auth.loginWithEmail(email, pass);
     closeAuthModal();
     toast('¡Bienvenido!', 'success');
+    loadTopics();
   } catch (e) {
     toast(e.message || 'Credenciales incorrectas', 'error');
   } finally { btn.textContent = 'Entrar'; btn.disabled = false; }
@@ -589,12 +610,13 @@ async function submitRegister() {
   const email = document.getElementById('reg-email').value.trim();
   const pass  = document.getElementById('reg-pass').value;
   if (!name || !email || !pass) { toast('Rellena todos los campos', 'error'); return; }
+  if (pass.length < 6) { toast('La contraseña debe tener al menos 6 caracteres', 'error'); return; }
   const btn = document.getElementById('reg-btn');
   btn.textContent = 'Creando cuenta...'; btn.disabled = true;
   try {
-    await pb.register(email, pass, name);
+    await auth.register(email, pass, name);
     closeAuthModal();
-    toast('¡Cuenta creada!', 'success');
+    toast('¡Cuenta creada! Revisa tu email si se requiere confirmación.', 'success');
   } catch (e) {
     toast(e.message || 'Error al registrar', 'error');
   } finally { btn.textContent = 'Crear cuenta'; btn.disabled = false; }
@@ -605,6 +627,13 @@ function showAuthTab(tab) {
   document.getElementById('auth-register').style.display = tab === 'register' ? 'block' : 'none';
   document.querySelectorAll('.auth-tab').forEach(t => {
     t.classList.toggle('active', t.dataset.tab === tab);
+    if (t.dataset.tab === tab) {
+      t.style.background = 'var(--surface2)';
+      t.style.color = 'var(--text)';
+    } else {
+      t.style.background = 'transparent';
+      t.style.color = 'var(--muted)';
+    }
   });
 }
 
@@ -628,7 +657,7 @@ async function submitPropose() {
   const btn = document.getElementById('propose-btn');
   btn.textContent = 'Enviando...'; btn.disabled = true;
   try {
-    await pb.proposeTopic({ title, category, subtopic, description: desc });
+    await api.proposeTopic({ title, category, subtopic, description: desc });
     closeProposeModal();
     document.getElementById('propose-title').value = '';
     document.getElementById('propose-subtopic').value = '';
@@ -684,16 +713,15 @@ async function loadAdminPanel() {
   if (!el) return;
   el.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--muted)">Cargando...</td></tr>`;
   try {
-    const res = await pb.getPendingTopics();
-    const topics = res.items || [];
-    if (topics.length === 0) {
+    const topics = await api.getPendingTopics();
+    if (!topics || topics.length === 0) {
       el.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--small)">Sin propuestas pendientes ✓</td></tr>`;
       return;
     }
     el.innerHTML = topics.map(t => `
       <tr>
         <td>${t.title}</td>
-        <td>${t.category || '—'}</td>
+        <td>${t.categories?.name || '—'}</td>
         <td>${t.subtopic || '—'}</td>
         <td><span class="badge badge-pending">Pendiente</span></td>
         <td style="display:flex;gap:0.5rem">
@@ -701,23 +729,27 @@ async function loadAdminPanel() {
           <button class="btn-reject" onclick="adminReject('${t.id}')">✕ Rechazar</button>
         </td>
       </tr>`).join('');
-  } catch {
-    el.innerHTML = `<tr><td colspan="5" style="color:var(--down);padding:1rem">Error de carga. ¿Eres admin?</td></tr>`;
+  } catch (e) {
+    el.innerHTML = `<tr><td colspan="5" style="color:var(--down);padding:1rem">Error: ${e.message}. ¿Eres admin?</td></tr>`;
   }
 }
 
 async function adminApprove(id) {
-  await pb.approveTopic(id);
-  toast('Tema publicado', 'success');
-  loadAdminPanel();
-  loadTopics();
+  try {
+    await api.approveTopic(id);
+    toast('Tema publicado', 'success');
+    loadAdminPanel();
+    loadTopics();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function adminReject(id) {
   if (!confirm('¿Rechazar y eliminar esta propuesta?')) return;
-  await pb.rejectTopic(id);
-  toast('Propuesta rechazada');
-  loadAdminPanel();
+  try {
+    await api.rejectTopic(id);
+    toast('Propuesta rechazada');
+    loadAdminPanel();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 function showPage(page) {
@@ -726,6 +758,16 @@ function showPage(page) {
   if (el) {
     el.style.display = 'block';
     if (page === 'admin') loadAdminPanel();
+    if (page === 'profile' && state.user) {
+      const name = state.profile?.name || 'Sin nombre';
+      const initials = name.slice(0, 2).toUpperCase();
+      const avatarEl = document.getElementById('profile-avatar');
+      const nameEl  = document.getElementById('profile-name');
+      const emailEl = document.getElementById('profile-email');
+      if (avatarEl) avatarEl.textContent = initials;
+      if (nameEl)  nameEl.textContent  = name;
+      if (emailEl) emailEl.textContent = state.user.email || '';
+    }
   }
   document.getElementById('user-menu')?.classList.remove('open');
 }
@@ -743,12 +785,11 @@ function toast(msg, type = '') {
 
 // ─── INIT ────────────────────────────────────────────────────
 async function init() {
-  pb.restoreAuth();
+  await auth.restoreSession();
   renderUserNav();
   await loadCategories();
   await loadTopics();
 
-  // Keyboard shortcut: '/' focuses search
   document.addEventListener('keydown', e => {
     if (e.key === '/' && !e.target.matches('input,textarea')) {
       e.preventDefault();
@@ -756,7 +797,6 @@ async function init() {
     }
   });
 
-  // Close modals on overlay click
   document.getElementById('topic-modal-overlay')?.addEventListener('click', e => {
     if (e.target === e.currentTarget) closeTopicModal();
   });
@@ -768,21 +808,4 @@ async function init() {
   });
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-  init();
-
-  // Sobrescribir showPage para poblar el perfil
-  const _origShowPage = showPage;
-  window.showPage = function(page) {
-    _origShowPage(page);
-    if (page === 'profile' && state.user) {
-      const initials = (state.user.name || '?').slice(0, 2).toUpperCase();
-      const el = document.getElementById('profile-avatar');
-      const nameEl  = document.getElementById('profile-name');
-      const emailEl = document.getElementById('profile-email');
-      if (el)      el.textContent = initials;
-      if (nameEl)  nameEl.textContent  = state.user.name  || 'Sin nombre';
-      if (emailEl) emailEl.textContent = state.user.email || '';
-    }
-  };
-});
+document.addEventListener('DOMContentLoaded', init);
