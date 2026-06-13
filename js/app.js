@@ -61,7 +61,21 @@ const auth = {
     localStorage.removeItem('pb_oauth_state');
     localStorage.removeItem('pb_oauth_verifier');
 
-    const { data } = await sb.auth.getSession();
+    // Salvaguarda: si getSession() se cuelga (storage corrupto u otro
+    // problema), no bloquear la app para siempre. Tras 3s, limpiar
+    // todo el localStorage de Supabase y continuar sin sesión.
+    const timeout = new Promise(resolve => setTimeout(() => resolve('timeout'), 3000));
+    const result = await Promise.race([sb.auth.getSession(), timeout]);
+
+    if (result === 'timeout') {
+      console.warn('La sesión guardada parece corrupta, limpiando almacenamiento local...');
+      Object.keys(localStorage)
+        .filter(k => k.startsWith('sb-') || k.includes('supabase'))
+        .forEach(k => localStorage.removeItem(k));
+      return; // continuar sin sesión, el usuario puede volver a iniciar sesión
+    }
+
+    const { data } = result;
     if (data.session) {
       state.user = data.session.user;
       await this.loadProfile();
