@@ -1,4 +1,4 @@
-name: Importar tendencias diarias
+name: Importar noticias de actualidad
 
 on:
   schedule:
@@ -18,7 +18,7 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Ejecutar importador de tendencias
+      - name: Ejecutar importador de noticias
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
