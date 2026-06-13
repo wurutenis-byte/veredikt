@@ -191,6 +191,10 @@ async function main() {
     }
 
     console.log(`  ${iniciativas.length} iniciativas encontradas`);
+    if (iniciativas.length > 0) {
+      console.log('  Ejemplo de iniciativa (claves):', Object.keys(iniciativas[0]));
+      console.log('  Ejemplo completo:', JSON.stringify(iniciativas[0]).slice(0, 500));
+    }
 
     // Solo procesar las más recientes (últimas 20 por fuente) para no saturar
     const recientes = iniciativas.slice(0, 20);
