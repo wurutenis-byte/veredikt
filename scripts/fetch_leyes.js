@@ -18,18 +18,54 @@ const SUBTOPIC = 'Leyes en tramitación · Congreso';
 
 // ─── 1. Obtener la URL actual del JSON de Proyectos de Ley ────
 async function getCurrentJsonUrl() {
-  const res = await fetch(OPENDATA_PAGE);
+  const res = await fetch(OPENDATA_PAGE, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'es-ES,es;q=0.9',
+    },
+  });
+  if (!res.ok) {
+    throw new Error(`La página de opendata respondió ${res.status}`);
+  }
   const html = await res.text();
+  console.log(`  (Página descargada: ${html.length} caracteres)`);
 
-  // Busca el enlace JSON de "Proyectos de ley" y "Proposiciones de ley"
-  const proyectosMatch = html.match(/href="(https:\/\/www\.congreso\.es\/webpublica\/opendata\/iniciativas\/ProyectosDeLey__[^"]+\.json)"/);
-  const proposicionesMatch = html.match(/href="(https:\/\/www\.congreso\.es\/webpublica\/opendata\/iniciativas\/ProposicionesDeLey__[^"]+\.json)"/);
+  // Probar varios patrones, ya que el HTML puede usar comillas simples/dobles
+  // o estar en distintas líneas
+  const patterns = [
+    /href=["'](https:\/\/www\.congreso\.es\/webpublica\/opendata\/iniciativas\/ProyectosDeLey__[^"']+\.json)["']/i,
+    /(https:\/\/www\.congreso\.es\/webpublica\/opendata\/iniciativas\/ProyectosDeLey__\d+\.json)/i,
+  ];
+  const patternsProposiciones = [
+    /href=["'](https:\/\/www\.congreso\.es\/webpublica\/opendata\/iniciativas\/ProposicionesDeLey__[^"']+\.json)["']/i,
+    /(https:\/\/www\.congreso\.es\/webpublica\/opendata\/iniciativas\/ProposicionesDeLey__\d+\.json)/i,
+  ];
 
-  const urls = [];
-  if (proyectosMatch) urls.push(proyectosMatch[1]);
-  if (proposicionesMatch) urls.push(proposicionesMatch[1]);
+  let proyectosUrl = null;
+  for (const p of patterns) {
+    const m = html.match(p);
+    if (m) { proyectosUrl = m[1]; break; }
+  }
+
+  let proposicionesUrl = null;
+  for (const p of patternsProposiciones) {
+    const m = html.match(p);
+    if (m) { proposicionesUrl = m[1]; break; }
+  }
+
+  const urls = [proyectosUrl, proposicionesUrl].filter(Boolean);
 
   if (urls.length === 0) {
+    // Diagnóstico: mostrar si la palabra "ProyectosDeLey" aparece en absoluto
+    const hasProyectos = html.includes('ProyectosDeLey');
+    const hasOpendata = html.includes('opendata');
+    console.log(`  Diagnóstico: contiene "ProyectosDeLey"=${hasProyectos}, contiene "opendata"=${hasOpendata}`);
+    // Mostrar un fragmento alrededor de "ProyectosDeLey" si existe
+    if (hasProyectos) {
+      const idx = html.indexOf('ProyectosDeLey');
+      console.log('  Fragmento:', html.slice(Math.max(0, idx - 100), idx + 200));
+    }
     throw new Error('No se encontraron enlaces JSON en la página de opendata del Congreso');
   }
   return urls;
@@ -126,7 +162,14 @@ async function main() {
   }
 
   console.log('→ Obteniendo URLs actuales de datos abiertos del Congreso...');
-  const jsonUrls = await getCurrentJsonUrl();
+  let jsonUrls;
+  try {
+    jsonUrls = await getCurrentJsonUrl();
+  } catch (e) {
+    console.error('Error obteniendo URLs (la web del Congreso puede haber cambiado su estructura):', e.message);
+    console.log('Finalizando sin crear temas esta vez.');
+    return;
+  }
   console.log(`  Encontradas ${jsonUrls.length} fuentes:`, jsonUrls);
 
   const categoryId = await getCategoryId(CATEGORY_NAME);
