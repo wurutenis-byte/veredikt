@@ -103,12 +103,26 @@ async function getCategoryId(name) {
   return data[0].id;
 }
 
-async function topicExists(title) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/topics?title=eq.${encodeURIComponent(title)}&select=id`, {
+async function getExistingLawTopicsMap() {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/topics?subtopic=eq.${encodeURIComponent(SUBTOPIC)}&select=id,title`, {
     headers: sbHeaders,
   });
-  const data = await res.json();
-  return data.length > 0;
+  if (!res.ok) throw new Error(`Error obteniendo temas existentes: ${res.status}`);
+  const rows = await res.json();
+  const map = new Map();
+  for (const row of rows) map.set(row.title, row.id);
+  return map;
+}
+
+async function deleteTopic(id) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/topics?id=eq.${id}`, {
+    method: 'DELETE',
+    headers: sbHeaders,
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Error borrando tema ${id}: ${err}`);
+  }
 }
 
 async function createTopic({ title, description, categoryId, subtopic }) {
@@ -173,9 +187,19 @@ async function main() {
 
   const categoryId = await getCategoryId(CATEGORY_NAME);
 
+  // Cargar de una vez todos los temas de leyes ya existentes (id + título)
+  console.log('→ Cargando temas de leyes existentes...');
+  const existingMap = await getExistingLawTopicsMap();
+  console.log(`  ${existingMap.size} temas de leyes ya en la base de datos`);
+
   let created = 0;
   let skipped = 0;
   let errors = 0;
+  let deleted = 0;
+
+  // Recopilamos todos los títulos que el Congreso reporta como vigentes
+  // ahora mismo, para luego borrar los que ya no estén
+  const currentTitles = new Set();
 
   for (const url of jsonUrls) {
     console.log(`\n→ Procesando ${url}`);
@@ -190,17 +214,15 @@ async function main() {
 
     console.log(`  ${iniciativas.length} iniciativas encontradas`);
 
-    // Solo procesar las más recientes (últimas 20 por fuente) para no saturar
-    const recientes = iniciativas.slice(0, 20);
-
-    for (const ini of recientes) {
+    for (const ini of iniciativas) {
       const title = buildTitle(ini);
       if (!title || title.length < 10) { skipped++; continue; }
 
-      try {
-        const exists = await topicExists(title);
-        if (exists) { skipped++; continue; }
+      currentTitles.add(title);
 
+      if (existingMap.has(title)) { skipped++; continue; }
+
+      try {
         await createTopic({
           title,
           description: buildDescription(ini),
@@ -216,8 +238,23 @@ async function main() {
     }
   }
 
+  // ─── Borrar leyes que ya no están en tramitación ────────────
+  console.log('\n→ Comprobando leyes que ya no están en tramitación...');
+  for (const [title, id] of existingMap.entries()) {
+    if (!currentTitles.has(title)) {
+      try {
+        await deleteTopic(id);
+        deleted++;
+        console.log(`  🗑 Borrado (ya no en tramitación): ${title.slice(0, 70)}...`);
+      } catch (e) {
+        errors++;
+        console.error(`  ✗ Error borrando "${title.slice(0, 50)}":`, e.message);
+      }
+    }
+  }
+
   console.log('\n══════════════════════════════════');
-  console.log(`  Creados: ${created} | Omitidos (ya existían): ${skipped} | Errores: ${errors}`);
+  console.log(`  Creados: ${created} | Omitidos (ya existían): ${skipped} | Borrados: ${deleted} | Errores: ${errors}`);
   console.log('══════════════════════════════════');
 }
 
