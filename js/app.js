@@ -268,6 +268,24 @@ const api = {
     const { error } = await sb.from('topics').delete().eq('id', id);
     if (error) throw error;
   },
+
+  async getPublishedTopics(search = '') {
+    let query = sb
+      .from('topics')
+      .select('*, categories(name)')
+      .eq('status', 'published')
+      .order('created_at', { ascending: false })
+      .limit(100);
+    if (search) query = query.ilike('title', `%${search}%`);
+    const { data, error } = await query;
+    if (error) throw error;
+    return data;
+  },
+
+  async deleteTopic(id) {
+    const { error } = await sb.from('topics').delete().eq('id', id);
+    if (error) throw error;
+  },
 };
 
 // ─── RENDER HELPERS ───────────────────────────────────────────
@@ -772,12 +790,59 @@ async function adminReject(id) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+// ─── ADMIN: temas publicados (borrar) ─────────────────────────
+let adminPublishedSearchTimeout;
+function onAdminPublishedSearch(value) {
+  clearTimeout(adminPublishedSearchTimeout);
+  adminPublishedSearchTimeout = setTimeout(() => loadAdminPublished(value), 350);
+}
+
+async function loadAdminPublished(search = '') {
+  const el = document.getElementById('admin-published-body');
+  if (!el) return;
+  el.innerHTML = `<tr><td colspan="4" style="text-align:center;padding:2rem;color:var(--muted)">Cargando...</td></tr>`;
+  try {
+    const topics = await api.getPublishedTopics(search);
+    if (!topics || topics.length === 0) {
+      el.innerHTML = `<tr><td colspan="4" style="text-align:center;padding:2rem;color:var(--small)">Sin resultados</td></tr>`;
+      return;
+    }
+    el.innerHTML = topics.map(t => `
+      <tr>
+        <td>${t.title}</td>
+        <td>${t.categories?.name || '—'}</td>
+        <td>${t.subtopic || '—'}</td>
+        <td>
+          <button class="btn-reject" onclick="adminDeleteTopic('${t.id}', this)">🗑 Borrar</button>
+        </td>
+      </tr>`).join('');
+  } catch (e) {
+    el.innerHTML = `<tr><td colspan="4" style="color:var(--down);padding:1rem">Error: ${e.message}</td></tr>`;
+  }
+}
+
+async function adminDeleteTopic(id, btn) {
+  if (!confirm('¿Borrar este tema permanentemente? Se eliminarán también sus votos, valoraciones y comentarios.')) return;
+  try {
+    btn.disabled = true;
+    btn.textContent = 'Borrando...';
+    await api.deleteTopic(id);
+    toast('Tema borrado', 'success');
+    btn.closest('tr').remove();
+    loadTopics();
+  } catch (e) {
+    toast(e.message, 'error');
+    btn.disabled = false;
+    btn.textContent = '🗑 Borrar';
+  }
+}
+
 function showPage(page) {
   document.querySelectorAll('.page').forEach(p => p.style.display = 'none');
   const el = document.getElementById(`page-${page}`);
   if (el) {
     el.style.display = 'block';
-    if (page === 'admin') loadAdminPanel();
+    if (page === 'admin') { loadAdminPanel(); loadAdminPublished(); }
     if (page === 'profile' && state.user) {
       const name = state.profile?.name || 'Sin nombre';
       const initials = name.slice(0, 2).toUpperCase();

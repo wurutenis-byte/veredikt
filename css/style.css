@@ -54,11 +54,27 @@ input, textarea { font-family: var(--font-display); }
 }
 .nav-logo {
   font-family: var(--font-mono);
-  font-size: 1.2rem;
+  font-size: 1.6rem;
   font-weight: 700;
   letter-spacing: -0.02em;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
-.nav-logo span { color: var(--accent); }
+.nav-logo-icon {
+  font-size: 1.8rem;
+  line-height: 1;
+  filter: drop-shadow(0 2px 8px rgba(124,92,252,0.35));
+}
+.nav-logo-text {
+  background: linear-gradient(90deg, var(--accent2), var(--accent));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.nav-logo-text em {
+  font-style: normal;
+}
 .nav-right { display: flex; align-items: center; gap: 1rem; }
 .btn-login {
   background: var(--accent);
@@ -201,7 +217,7 @@ input, textarea { font-family: var(--font-display); }
 .ticker-track {
   display: inline-flex;
   gap: 3rem;
-  animation: ticker 40s linear infinite;
+  animation: ticker 90s linear infinite;
   white-space: nowrap;
 }
 @keyframes ticker {

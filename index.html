@@ -13,7 +13,7 @@
 <!-- ─── NAVBAR ─────────────────────────────────────────── -->
 <nav class="navbar">
   <a class="nav-logo" href="#" onclick="showPage('home')">
-    vere<span>dikt</span>
+    <span class="nav-logo-icon">⚖️</span><span class="nav-logo-text">vere<em>dikt</em></span>
   </a>
   <div class="nav-right" id="nav-right">
     <button class="btn-login" onclick="openAuthModal()">Entrar</button>
@@ -109,6 +109,29 @@
           </thead>
           <tbody id="admin-table-body">
             <tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--muted)">Cargando…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;margin-top:1.5rem">
+      <div style="padding:1.2rem 1.5rem;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+        <h2 style="font-size:1rem;font-weight:600">Temas publicados</h2>
+        <input type="text" class="form-input" style="max-width:240px" placeholder="Buscar por título..."
+          oninput="onAdminPublishedSearch(this.value)">
+      </div>
+      <div style="overflow-x:auto">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Título</th>
+              <th>Categoría</th>
+              <th>Subtema</th>
+              <th>Acciones</th>
+            </tr>
+          </thead>
+          <tbody id="admin-published-body">
+            <tr><td colspan="4" style="text-align:center;padding:2rem;color:var(--muted)">Cargando…</td></tr>
           </tbody>
         </table>
       </div>
