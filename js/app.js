@@ -785,10 +785,32 @@ function toast(msg, type = '') {
 
 // ─── INIT ────────────────────────────────────────────────────
 async function init() {
-  await auth.restoreSession();
+  console.log('[INIT] start');
+  console.log('[INIT] typeof window.supabase =', typeof window.supabase);
+  console.log('[INIT] typeof sb =', typeof sb);
+  try {
+    console.log('[INIT] calling restoreSession...');
+    await auth.restoreSession();
+    console.log('[INIT] restoreSession done');
+  } catch (e) {
+    console.error('[INIT] restoreSession ERROR:', e);
+  }
   renderUserNav();
-  await loadCategories();
-  await loadTopics();
+  try {
+    console.log('[INIT] calling loadCategories...');
+    await loadCategories();
+    console.log('[INIT] loadCategories done');
+  } catch (e) {
+    console.error('[INIT] loadCategories ERROR:', e);
+  }
+  try {
+    console.log('[INIT] calling loadTopics...');
+    await loadTopics();
+    console.log('[INIT] loadTopics done');
+  } catch (e) {
+    console.error('[INIT] loadTopics ERROR:', e);
+  }
+  console.log('[INIT] complete');
 
   document.addEventListener('keydown', e => {
     if (e.key === '/' && !e.target.matches('input,textarea')) {
