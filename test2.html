@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Test Veredikt 2</title>
+</head>
+<body style="background:#0d0d0f;color:#fff;font-family:sans-serif;padding:2rem">
+  <h1>Página de prueba 2 - con Supabase</h1>
+  <p id="result">Probando...</p>
+
+  <script src="js/vendor/supabase.min.js"></script>
+  <script>
+    document.getElementById('result').textContent = 'Script ejecutándose... typeof supabase = ' + typeof window.supabase;
+
+    Promise.resolve(123).then(v => {
+      document.getElementById('result').textContent += ' | PROMESA OK: ' + v;
+    });
+
+    try {
+      const sb = window.supabase.createClient(
+        'https://qnzlmgqchmffnrlfljrf.supabase.co',
+        'sb_publishable_fioeWGpnQ-2eSkn_VhivIA_K8O_iMKN'
+      );
+      document.getElementById('result').textContent += ' | Cliente creado OK';
+
+      sb.from('categories').select('*').then(r => {
+        document.getElementById('result').textContent += ' | DATOS: ' + JSON.stringify(r).slice(0, 200);
+      });
+    } catch (e) {
+      document.getElementById('result').textContent += ' | ERROR: ' + e.message;
+    }
+  </script>
+</body>
+</html>
