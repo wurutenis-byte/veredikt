@@ -1,0 +1,25 @@
+name: Importar tendencias diarias
+
+on:
+  schedule:
+    # Todos los días a las 7:00 UTC (9:00 hora España aprox.)
+    - cron: '0 7 * * *'
+  workflow_dispatch: {}  # permite ejecutarlo manualmente desde GitHub
+
+jobs:
+  fetch-trends:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Ejecutar importador de tendencias
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: node scripts/fetch_trends.js
