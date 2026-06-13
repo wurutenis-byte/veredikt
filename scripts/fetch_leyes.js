@@ -133,24 +133,22 @@ async function createTopic({ title, description, categoryId, subtopic }) {
 
 // ─── 4. Limpieza y formato del título ──────────────────────────
 function buildTitle(iniciativa) {
-  // Campos típicos: "Tipo", "Objeto", "Titulo", "TituloCorto", "Tipotram"
-  const objeto = iniciativa.Objeto || iniciativa.Titulo || iniciativa.objeto || '';
-  // Limitar longitud y limpiar espacios
+  const objeto = iniciativa.OBJETO || iniciativa.Objeto || '';
   let title = objeto.trim().replace(/\s+/g, ' ');
   if (title.length > 180) title = title.slice(0, 177) + '...';
   return title;
 }
 
 function buildDescription(iniciativa) {
-  const tipo = iniciativa.Tipo || iniciativa.tipo || 'Iniciativa legislativa';
-  const fecha = iniciativa.FechaCalificacion || iniciativa.Fecha || iniciativa.FechaPresentacion || '';
-  const situacion = iniciativa.Situacion || iniciativa.SituacionActual || iniciativa.Tramitacion || '';
-  const autor = iniciativa.Autor || iniciativa.AutorTexto || 'Congreso de los Diputados';
+  const tipo = iniciativa.TIPO || iniciativa.Tipo || 'Iniciativa legislativa';
+  const fecha = iniciativa.FECHACALIFICACION || iniciativa.FACHAPRESENTACION || '';
+  const situacion = iniciativa.SITUACIONACTUAL || iniciativa.TRAMITACIONSEGUIDA || '';
+  const autor = iniciativa.AUTOR || 'Congreso de los Diputados';
 
   let desc = `${tipo}.`;
-  if (autor) desc += ` Presentada por: ${autor}.`;
+  if (autor) desc += ` Presentada por: ${String(autor).replace(/\s+/g, ' ').trim()}.`;
   if (fecha) desc += ` Fecha: ${fecha}.`;
-  if (situacion) desc += ` Estado: ${situacion}.`;
+  if (situacion) desc += ` Estado: ${String(situacion).replace(/\s+/g, ' ').trim()}.`;
   desc += ' ¿Apoyas esta iniciativa legislativa?';
   return desc;
 }
@@ -191,10 +189,6 @@ async function main() {
     }
 
     console.log(`  ${iniciativas.length} iniciativas encontradas`);
-    if (iniciativas.length > 0) {
-      console.log('  Ejemplo de iniciativa (claves):', Object.keys(iniciativas[0]));
-      console.log('  Ejemplo completo:', JSON.stringify(iniciativas[0]).slice(0, 500));
-    }
 
     // Solo procesar las más recientes (últimas 20 por fuente) para no saturar
     const recientes = iniciativas.slice(0, 20);
