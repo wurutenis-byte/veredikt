@@ -376,10 +376,10 @@ function renderCategories(categories) {
   list.innerHTML = all + items;
 }
 
-function renderTopics(topics) {
+function renderTopics(topics, append = false) {
   const grid = document.getElementById('topics-grid');
   if (!grid) return;
-  if (topics.length === 0) {
+  if (topics.length === 0 && !append) {
     grid.innerHTML = `
       <div class="empty-state" style="grid-column:1/-1">
         <div class="empty-icon">🔍</div>
@@ -388,7 +388,9 @@ function renderTopics(topics) {
       </div>`;
     return;
   }
-  grid.innerHTML = topics.map(renderTopicCard).join('');
+  const html = topics.map(renderTopicCard).join('');
+  if (append) grid.insertAdjacentHTML('beforeend', html);
+  else grid.innerHTML = html;
 }
 
 function showSkeletons() {
@@ -398,10 +400,14 @@ function showSkeletons() {
 }
 
 // ─── DATA LOADING ─────────────────────────────────────────────
-async function loadTopics() {
+const PAGE_SIZE = 20;
+
+async function loadTopics(append = false) {
   if (state.loading) return;
   state.loading = true;
-  showSkeletons();
+  if (!append) showSkeletons();
+  else setLoadMoreLoading(true);
+
   try {
     const topics = await api.getTopics({
       category: state.currentCategory,
@@ -409,15 +415,40 @@ async function loadTopics() {
       search: document.getElementById('search-input')?.value || '',
       page: state.page,
     });
-    state.topics = topics || [];
-    renderTopics(state.topics);
-    updateTicker();
+    const newTopics = topics || [];
+
+    if (append) state.topics = [...state.topics, ...newTopics];
+    else state.topics = newTopics;
+
+    renderTopics(newTopics, append);
+    updateLoadMoreButton(newTopics.length);
+    if (!append) updateTicker();
   } catch (e) {
     console.error(e);
-    renderTopicsError(e);
+    if (!append) renderTopicsError(e);
   } finally {
     state.loading = false;
+    setLoadMoreLoading(false);
   }
+}
+
+async function loadMoreTopics() {
+  state.page += 1;
+  await loadTopics(true);
+}
+
+function setLoadMoreLoading(loading) {
+  const btn = document.getElementById('load-more-btn');
+  if (!btn) return;
+  btn.disabled = loading;
+  btn.textContent = loading ? 'Cargando...' : 'Cargar más';
+}
+
+function updateLoadMoreButton(lastBatchCount) {
+  const btn = document.getElementById('load-more-btn');
+  if (!btn) return;
+  // Si la última página trajo menos del tamaño completo, no hay más resultados
+  btn.style.display = (lastBatchCount < PAGE_SIZE) ? 'none' : 'block';
 }
 
 function renderTopicsError(e) {
