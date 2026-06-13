@@ -31,15 +31,14 @@ async function getCurrentJsonUrl() {
   const html = await res.text();
   console.log(`  (Página descargada: ${html.length} caracteres)`);
 
-  // Probar varios patrones, ya que el HTML puede usar comillas simples/dobles
-  // o estar en distintas líneas
+  // Los enlaces son relativos (ej: /webpublica/opendata/iniciativas/ProyectosDeLey__XXXX.json)
   const patterns = [
+    /href=["'](\/webpublica\/opendata\/iniciativas\/ProyectosDeLey__[^"']+\.json)["']/i,
     /href=["'](https:\/\/www\.congreso\.es\/webpublica\/opendata\/iniciativas\/ProyectosDeLey__[^"']+\.json)["']/i,
-    /(https:\/\/www\.congreso\.es\/webpublica\/opendata\/iniciativas\/ProyectosDeLey__\d+\.json)/i,
   ];
   const patternsProposiciones = [
+    /href=["'](\/webpublica\/opendata\/iniciativas\/ProposicionesDeLey__[^"']+\.json)["']/i,
     /href=["'](https:\/\/www\.congreso\.es\/webpublica\/opendata\/iniciativas\/ProposicionesDeLey__[^"']+\.json)["']/i,
-    /(https:\/\/www\.congreso\.es\/webpublica\/opendata\/iniciativas\/ProposicionesDeLey__\d+\.json)/i,
   ];
 
   let proyectosUrl = null;
@@ -54,7 +53,9 @@ async function getCurrentJsonUrl() {
     if (m) { proposicionesUrl = m[1]; break; }
   }
 
-  const urls = [proyectosUrl, proposicionesUrl].filter(Boolean);
+  const urls = [proyectosUrl, proposicionesUrl]
+    .filter(Boolean)
+    .map(u => u.startsWith('http') ? u : `https://www.congreso.es${u}`);
 
   if (urls.length === 0) {
     // Diagnóstico: mostrar si la palabra "ProyectosDeLey" aparece en absoluto
