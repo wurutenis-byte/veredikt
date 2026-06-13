@@ -55,6 +55,12 @@ const auth = {
   },
 
   async restoreSession() {
+    // Limpiar claves antiguas de PocketBase que puedan corromper el storage
+    localStorage.removeItem('pb_token');
+    localStorage.removeItem('pb_user');
+    localStorage.removeItem('pb_oauth_state');
+    localStorage.removeItem('pb_oauth_verifier');
+
     const { data } = await sb.auth.getSession();
     if (data.session) {
       state.user = data.session.user;
@@ -785,32 +791,14 @@ function toast(msg, type = '') {
 
 // ─── INIT ────────────────────────────────────────────────────
 async function init() {
-  console.log('[INIT] start');
-  console.log('[INIT] typeof window.supabase =', typeof window.supabase);
-  console.log('[INIT] typeof sb =', typeof sb);
   try {
-    console.log('[INIT] calling restoreSession...');
     await auth.restoreSession();
-    console.log('[INIT] restoreSession done');
   } catch (e) {
-    console.error('[INIT] restoreSession ERROR:', e);
+    console.error('Error restaurando sesión:', e);
   }
   renderUserNav();
-  try {
-    console.log('[INIT] calling loadCategories...');
-    await loadCategories();
-    console.log('[INIT] loadCategories done');
-  } catch (e) {
-    console.error('[INIT] loadCategories ERROR:', e);
-  }
-  try {
-    console.log('[INIT] calling loadTopics...');
-    await loadTopics();
-    console.log('[INIT] loadTopics done');
-  } catch (e) {
-    console.error('[INIT] loadTopics ERROR:', e);
-  }
-  console.log('[INIT] complete');
+  await loadCategories();
+  await loadTopics();
 
   document.addEventListener('keydown', e => {
     if (e.key === '/' && !e.target.matches('input,textarea')) {
