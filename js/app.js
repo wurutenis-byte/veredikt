@@ -6,14 +6,25 @@ const SUPABASE_ANON_KEY = 'sb_publishable_fioeWGpnQ-2eSkn_VhivIA_K8O_iMKN';
 
 // ─── SUPABASE CLIENT ────────────────────────────────────────
 // Cargado vía CDN en index.html como `window.supabase`
+//
+// ⚠️ NOTA TÉCNICA IMPORTANTE:
+// sb.auth.* y sb.from() de la librería oficial se quedan COLGADOS
+// indefinidamente (Promise que nunca resuelve) en cuanto hay una
+// sesión activa guardada en localStorage. Es un bug del cliente
+// con el mecanismo interno de refresh de token / Web Locks API en
+// este entorno. Para evitarlo, todas las operaciones de datos y
+// auth se hacen aquí con `fetch` directo contra la REST API de
+// PostgREST y el endpoint /auth/v1 de Supabase (GoTrue), gestionando
+// la sesión manualmente en localStorage.
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
-    storage: window.localStorage,
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
+    persistSession: false,   // gestionamos la sesión nosotros mismos
+    autoRefreshToken: false,
+    detectSessionInUrl: false,
   },
 });
+
+const STORAGE_KEY = `sb-${SUPABASE_URL.match(/https:\/\/([^.]+)\.supabase\.co/)?.[1]}-auth-token`;
 
 // ─── STATE ───────────────────────────────────────────────────
 const state = {
@@ -28,33 +39,104 @@ const state = {
   openTopic: null,
 };
 
+// ─── REST helpers (fetch directo) ──────────────────────────────
+function getSavedSession() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch { return null; }
+}
+
+function saveSession(session) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+}
+
+function clearSession() {
+  localStorage.removeItem(STORAGE_KEY);
+}
+
+function authHeaders() {
+  const session = getSavedSession();
+  const token = session?.access_token || SUPABASE_ANON_KEY;
+  return {
+    'Content-Type': 'application/json',
+    'apikey': SUPABASE_ANON_KEY,
+    'Authorization': `Bearer ${token}`,
+  };
+}
+
+// Petición genérica a PostgREST (/rest/v1/<table>)
+async function rest(path, { method = 'GET', body = null, prefer = null, params = {} } = {}) {
+  const url = new URL(`${SUPABASE_URL}/rest/v1/${path}`);
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null) url.searchParams.set(k, v);
+  }
+  const headers = authHeaders();
+  if (prefer) headers['Prefer'] = prefer;
+
+  const res = await fetch(url.toString(), {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+
+  if (!res.ok) {
+    let errMsg;
+    try { errMsg = (await res.json()).message; } catch { errMsg = `Error ${res.status}`; }
+    throw new Error(errMsg || `Error ${res.status}`);
+  }
+
+  if (res.status === 204) return null; // No Content (deletes/updates sin Prefer)
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+
+// Petición al endpoint de auth (/auth/v1/...)
+async function authRest(path, body) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': SUPABASE_ANON_KEY,
+    },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error_description || data.msg || data.message || 'Error de autenticación');
+  return data;
+}
+
 // ─── AUTH ────────────────────────────────────────────────────
 const auth = {
   async loginWithGoogle() {
-    const { error } = await sb.auth.signInWithOAuth({
-      provider: 'google',
-      options: { redirectTo: window.location.origin }
-    });
-    if (error) toast(error.message, 'error');
+    // Redirección OAuth estándar de GoTrue (no requiere el cliente JS)
+    const redirectTo = encodeURIComponent(window.location.origin + window.location.pathname);
+    window.location.href = `${SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to=${redirectTo}`;
   },
 
   async loginWithEmail(email, password) {
-    const { data, error } = await sb.auth.signInWithPassword({ email, password });
-    if (error) throw error;
+    const data = await authRest('token?grant_type=password', { email, password });
+    saveSession(data);
+    state.user = data.user;
+    await this.loadProfile();
+    renderUserNav();
     return data;
   },
 
   async register(email, password, name) {
-    const { data, error } = await sb.auth.signUp({
-      email, password,
-      options: { data: { name } }
-    });
-    if (error) throw error;
+    const data = await authRest('signup', { email, password, data: { name } });
+    if (data.access_token) {
+      saveSession(data);
+      state.user = data.user;
+      await this.loadProfile();
+      renderUserNav();
+    }
     return data;
   },
 
   async logout() {
-    await sb.auth.signOut();
+    clearSession();
     state.user = null;
     state.profile = null;
     renderUserNav();
@@ -68,141 +150,122 @@ const auth = {
     localStorage.removeItem('pb_oauth_state');
     localStorage.removeItem('pb_oauth_verifier');
 
-    // sb.auth.getSession() puede colgarse indefinidamente en algunos
-    // entornos (bug conocido de supabase-js v2 al intentar refrescar
-    // el token). En su lugar, leemos la sesión directamente de
-    // localStorage, donde Supabase la guarda de forma síncrona.
-    try {
-      const projectRef = SUPABASE_URL.match(/https:\/\/([^.]+)\.supabase\.co/)?.[1];
-      const storageKey = `sb-${projectRef}-auth-token`;
-      const raw = localStorage.getItem(storageKey);
-      if (!raw) return; // no hay sesión guardada
+    // 1. Comprobar si venimos de un redirect OAuth (token en el hash de la URL)
+    if (window.location.hash.includes('access_token')) {
+      const params = new URLSearchParams(window.location.hash.slice(1));
+      const accessToken = params.get('access_token');
+      const refreshToken = params.get('refresh_token');
+      if (accessToken) {
+        // Obtener datos del usuario con el token recién recibido
+        try {
+          const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+            headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${accessToken}` },
+          });
+          const user = await res.json();
+          const session = {
+            access_token: accessToken,
+            refresh_token: refreshToken,
+            user,
+            expires_at: Math.floor(Date.now() / 1000) + parseInt(params.get('expires_in') || '3600'),
+          };
+          saveSession(session);
+          state.user = user;
+          // Limpiar el hash de la URL
+          history.replaceState(null, '', window.location.pathname + window.location.search);
+        } catch (e) {
+          console.error('Error procesando redirect OAuth:', e);
+        }
+      }
+    }
 
-      const parsed = JSON.parse(raw);
-      const session = parsed?.currentSession || parsed; // según versión, puede venir directo
-
+    // 2. Restaurar sesión guardada de localStorage
+    if (!state.user) {
+      const session = getSavedSession();
       if (session?.user) {
         state.user = session.user;
-        await this.loadProfile();
-        renderUserNav();
       }
-    } catch (e) {
-      console.warn('No se pudo restaurar la sesión guardada:', e);
+    }
+
+    if (state.user) {
+      await this.loadProfile();
+      renderUserNav();
     }
   },
 
   async loadProfile() {
     if (!state.user) return;
-    const { data } = await sb
-      .from('profiles')
-      .select('*')
-      .eq('id', state.user.id)
-      .single();
-    state.profile = data;
+    try {
+      const data = await rest('profiles', { params: { id: `eq.${state.user.id}`, select: '*' } });
+      state.profile = data?.[0] || null;
+    } catch (e) {
+      console.warn('No se pudo cargar el perfil:', e.message);
+      state.profile = null;
+    }
   },
 };
-
-// Listen for auth changes (handles OAuth redirect too)
-sb.auth.onAuthStateChange(async (event, session) => {
-  if (session) {
-    state.user = session.user;
-    await auth.loadProfile();
-  } else {
-    state.user = null;
-    state.profile = null;
-  }
-  renderUserNav();
-});
 
 // ─── DATA API ───────────────────────────────────────────────
 const api = {
   async getCategories() {
-    const { data, error } = await sb
-      .from('categories')
-      .select('*')
-      .order('order', { ascending: true });
-    if (error) throw error;
-    return data;
+    return rest('categories', { params: { select: '*', order: 'order.asc' } });
   },
 
   async getTopics({ category = 'all', sort = 'trending', search = '', page = 1 } = {}) {
-    let query = sb
-      .from('topics')
-      .select('*, categories(name, icon)')
-      .eq('status', 'published');
-
-    if (category !== 'all') query = query.eq('category_id', category);
-    if (search) query = query.or(`title.ilike.%${search}%,subtopic.ilike.%${search}%`);
-
     const sortMap = {
-      trending:      { column: 'votes_up',    ascending: false },
-      newest:        { column: 'created_at',  ascending: false },
-      top:           { column: 'rating_avg',  ascending: false },
-      controversial: { column: 'votes_total', ascending: false },
+      trending:      'votes_up.desc',
+      newest:        'created_at.desc',
+      top:           'rating_avg.desc',
+      controversial: 'votes_total.desc',
     };
-    const s = sortMap[sort] || sortMap.trending;
-    query = query.order(s.column, { ascending: s.ascending });
-
     const perPage = 20;
     const from = (page - 1) * perPage;
-    query = query.range(from, from + perPage - 1);
+    const to = from + perPage - 1;
 
-    const { data, error } = await query;
-    if (error) throw error;
-    return data;
+    const params = {
+      select: '*,categories(name,icon)',
+      status: 'eq.published',
+      order: sortMap[sort] || sortMap.trending,
+    };
+    if (category !== 'all') params.category_id = `eq.${category}`;
+    if (search) params.or = `(title.ilike.*${search}*,subtopic.ilike.*${search}*)`;
+
+    const headers = authHeaders();
+    headers['Range'] = `${from}-${to}`;
+
+    const url = new URL(`${SUPABASE_URL}/rest/v1/topics`);
+    for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+
+    const res = await fetch(url.toString(), { headers });
+    if (!res.ok) throw new Error(`Error ${res.status}`);
+    return res.json();
   },
 
   async getTopic(id) {
-    const { data, error } = await sb
-      .from('topics')
-      .select('*, categories(name, icon)')
-      .eq('id', id)
-      .single();
-    if (error) throw error;
-    return data;
+    const data = await rest('topics', { params: { id: `eq.${id}`, select: '*,categories(name,icon)' } });
+    if (!data?.length) throw new Error('Tema no encontrado');
+    return data[0];
   },
 
   async getMyVote(topicId) {
     if (!state.user) return null;
-    const { data } = await sb
-      .from('votes')
-      .select('*')
-      .eq('topic_id', topicId)
-      .eq('user_id', state.user.id)
-      .maybeSingle();
-    return data;
+    const data = await rest('votes', { params: { topic_id: `eq.${topicId}`, user_id: `eq.${state.user.id}`, select: '*' } });
+    return data?.[0] || null;
   },
 
   async getMyRating(topicId) {
     if (!state.user) return null;
-    const { data } = await sb
-      .from('ratings')
-      .select('*')
-      .eq('topic_id', topicId)
-      .eq('user_id', state.user.id)
-      .maybeSingle();
-    return data;
+    const data = await rest('ratings', { params: { topic_id: `eq.${topicId}`, user_id: `eq.${state.user.id}`, select: '*' } });
+    return data?.[0] || null;
   },
 
   async getMyComment(topicId) {
     if (!state.user) return null;
-    const { data } = await sb
-      .from('comments')
-      .select('*')
-      .eq('topic_id', topicId)
-      .eq('user_id', state.user.id)
-      .maybeSingle();
-    return data;
+    const data = await rest('comments', { params: { topic_id: `eq.${topicId}`, user_id: `eq.${state.user.id}`, select: '*' } });
+    return data?.[0] || null;
   },
 
   async getComments(topicId) {
-    const { data, error } = await sb
-      .from('comments')
-      .select('*, profiles(name)')
-      .eq('topic_id', topicId)
-      .order('created_at', { ascending: false });
-    if (error) throw error;
-    return data;
+    return rest('comments', { params: { topic_id: `eq.${topicId}`, select: '*,profiles(name)', order: 'created_at.desc' } });
   },
 
   async vote(topicId, value) {
@@ -210,15 +273,14 @@ const api = {
     const existing = await this.getMyVote(topicId);
     if (existing) {
       if (existing.value === value) {
-        await sb.from('votes').delete().eq('id', existing.id);
+        await rest(`votes?id=eq.${existing.id}`, { method: 'DELETE' });
         toast('Voto retirado');
       } else {
-        await sb.from('votes').update({ value }).eq('id', existing.id);
+        await rest(`votes?id=eq.${existing.id}`, { method: 'PATCH', body: { value } });
         toast('Voto actualizado');
       }
     } else {
-      const { error } = await sb.from('votes').insert({ user_id: state.user.id, topic_id: topicId, value });
-      if (error) { toast(error.message, 'error'); return; }
+      await rest('votes', { method: 'POST', body: { user_id: state.user.id, topic_id: topicId, value } });
       toast('¡Votado!', 'success');
     }
   },
@@ -227,11 +289,10 @@ const api = {
     if (!state.user) { openAuthModal(); return; }
     const existing = await this.getMyRating(topicId);
     if (existing) {
-      await sb.from('ratings').update({ value }).eq('id', existing.id);
+      await rest(`ratings?id=eq.${existing.id}`, { method: 'PATCH', body: { value } });
       toast('Valoración actualizada');
     } else {
-      const { error } = await sb.from('ratings').insert({ user_id: state.user.id, topic_id: topicId, value });
-      if (error) { toast(error.message, 'error'); return; }
+      await rest('ratings', { method: 'POST', body: { user_id: state.user.id, topic_id: topicId, value } });
       toast('¡Valorado!', 'success');
     }
   },
@@ -240,59 +301,44 @@ const api = {
     if (!state.user) { openAuthModal(); return; }
     const existing = await this.getMyComment(topicId);
     if (existing) { toast('Ya has comentado en este tema', 'error'); return null; }
-    const { error } = await sb.from('comments').insert({ user_id: state.user.id, topic_id: topicId, text });
-    if (error) { toast(error.message, 'error'); return null; }
+    await rest('comments', { method: 'POST', body: { user_id: state.user.id, topic_id: topicId, text } });
     toast('Comentario publicado', 'success');
   },
 
   async proposeTopic({ title, category, subtopic, description }) {
     if (!state.user) { openAuthModal(); return; }
-    const { error } = await sb.from('topics').insert({
-      title, subtopic, description,
-      category_id: category,
-      author_id: state.user.id,
-      status: 'pending',
+    await rest('topics', {
+      method: 'POST',
+      body: {
+        title, subtopic, description,
+        category_id: category,
+        author_id: state.user.id,
+        status: 'pending',
+      },
     });
-    if (error) throw error;
   },
 
   // Admin
   async getPendingTopics() {
-    const { data, error } = await sb
-      .from('topics')
-      .select('*, categories(name)')
-      .eq('status', 'pending')
-      .order('created_at', { ascending: false });
-    if (error) throw error;
-    return data;
+    return rest('topics', { params: { status: 'eq.pending', select: '*,categories(name)', order: 'created_at.desc' } });
   },
 
   async approveTopic(id) {
-    const { error } = await sb.from('topics').update({ status: 'published' }).eq('id', id);
-    if (error) throw error;
+    await rest(`topics?id=eq.${id}`, { method: 'PATCH', body: { status: 'published' } });
   },
 
   async rejectTopic(id) {
-    const { error } = await sb.from('topics').delete().eq('id', id);
-    if (error) throw error;
+    await rest(`topics?id=eq.${id}`, { method: 'DELETE' });
   },
 
   async getPublishedTopics(search = '') {
-    let query = sb
-      .from('topics')
-      .select('*, categories(name)')
-      .eq('status', 'published')
-      .order('created_at', { ascending: false })
-      .limit(100);
-    if (search) query = query.ilike('title', `%${search}%`);
-    const { data, error } = await query;
-    if (error) throw error;
-    return data;
+    const params = { status: 'eq.published', select: '*,categories(name)', order: 'created_at.desc', limit: '100' };
+    if (search) params.title = `ilike.*${search}*`;
+    return rest('topics', { params });
   },
 
   async deleteTopic(id) {
-    const { error } = await sb.from('topics').delete().eq('id', id);
-    if (error) throw error;
+    await rest(`topics?id=eq.${id}`, { method: 'DELETE' });
   },
 };
 
