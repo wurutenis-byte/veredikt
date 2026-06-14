@@ -539,16 +539,22 @@ function updateTicker() {
   const items = [...state.topics, ...state.topics].map(t =>
     `<span class="ticker-item"><strong>${t.title}</strong> 👍${t.votes_up || 0} · ⭐${t.rating_avg ? Number(t.rating_avg).toFixed(1) : '—'}</span>`
   ).join('');
+
+  // Quitar la animación, insertar contenido, y volver a aplicarla
+  // tras confirmar que el layout ya está asentado (rAF x2 + timeout).
+  // En algunos navegadores móviles la animación calculada en base al
+  // ancho del contenido no arranca si se aplica antes del primer
+  // layout completo de la página.
+  track.style.animation = 'none';
   track.innerHTML = items;
 
-  // Forzar reinicio de la animación CSS: en algunos navegadores móviles
-  // (especialmente en orientación vertical durante la carga inicial),
-  // la animación no arranca hasta que hay un reflow/repaint del elemento.
-  track.style.animation = 'none';
-  // Forzar reflow leyendo una propiedad de layout
-  // eslint-disable-next-line no-unused-expressions
-  track.offsetHeight;
-  track.style.animation = '';
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        track.style.animation = 'ticker 90s linear infinite';
+      }, 50);
+    });
+  });
 }
 
 // ─── INTERACTIONS ─────────────────────────────────────────────
