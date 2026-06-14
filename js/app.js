@@ -6,7 +6,14 @@ const SUPABASE_ANON_KEY = 'sb_publishable_fioeWGpnQ-2eSkn_VhivIA_K8O_iMKN';
 
 // ─── SUPABASE CLIENT ────────────────────────────────────────
 // Cargado vía CDN en index.html como `window.supabase`
-const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    storage: window.localStorage,
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+  },
+});
 
 // ─── STATE ───────────────────────────────────────────────────
 const state = {
