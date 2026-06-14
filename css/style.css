@@ -726,12 +726,63 @@ input, textarea { font-family: var(--font-display); }
 
 /* ─── RESPONSIVE ─────────────────────────────────────────── */
 @media (max-width: 768px) {
-  .main-layout { grid-template-columns: 1fr; }
-  .sidebar { display: none; }
+  .main-layout {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .sidebar {
+    position: static;
+    width: 100%;
+    order: -1; /* mostrar antes que el feed */
+  }
+  .sidebar-title { padding-left: 0.25rem; }
+  .cat-list {
+    display: flex;
+    flex-direction: row;
+    gap: 0.5rem;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 0.5rem;
+    scrollbar-width: none;
+  }
+  .cat-list::-webkit-scrollbar { display: none; }
+  .cat-item {
+    flex: 0 0 auto;
+  }
+  .cat-item a {
+    white-space: nowrap;
+    padding: 0.5rem 0.9rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+  }
+  .cat-item a.active {
+    border-color: var(--accent);
+  }
+  .cat-count { display: none; }
+
   .topics-grid { grid-template-columns: 1fr; }
   .navbar { padding: 0 1rem; }
   .hero { padding: 2.5rem 1rem 2rem; }
   .main-layout { padding: 0 1rem 4rem; }
+
+  /* Logo más compacto */
+  .nav-logo { font-size: 1.25rem; }
+  .nav-logo-icon { font-size: 1.4rem; }
+
+  /* Modal a pantalla completa */
+  .modal {
+    padding: 1.25rem;
+    max-height: 100vh;
+    border-radius: var(--radius);
+  }
+
+  /* Botones de votar en columna */
+  .vote-big { flex-direction: column; }
+  .vote-big-btn { width: 100%; }
+
+  /* FAB un poco más pequeño y arriba de posibles barras del navegador */
+  .fab { bottom: 1.25rem; right: 1.25rem; width: 48px; height: 48px; font-size: 1.4rem; }
 }
 
 /* ─── LOADING ─────────────────────────────────────────────── */
