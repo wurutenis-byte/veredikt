@@ -61,25 +61,26 @@ const auth = {
     localStorage.removeItem('pb_oauth_state');
     localStorage.removeItem('pb_oauth_verifier');
 
-    // Salvaguarda: si getSession() se cuelga (storage corrupto u otro
-    // problema), no bloquear la app para siempre. Tras 3s, limpiar
-    // todo el localStorage de Supabase y continuar sin sesión.
-    const timeout = new Promise(resolve => setTimeout(() => resolve('timeout'), 3000));
-    const result = await Promise.race([sb.auth.getSession(), timeout]);
+    // sb.auth.getSession() puede colgarse indefinidamente en algunos
+    // entornos (bug conocido de supabase-js v2 al intentar refrescar
+    // el token). En su lugar, leemos la sesión directamente de
+    // localStorage, donde Supabase la guarda de forma síncrona.
+    try {
+      const projectRef = SUPABASE_URL.match(/https:\/\/([^.]+)\.supabase\.co/)?.[1];
+      const storageKey = `sb-${projectRef}-auth-token`;
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) return; // no hay sesión guardada
 
-    if (result === 'timeout') {
-      console.warn('La sesión guardada parece corrupta, limpiando almacenamiento local...');
-      Object.keys(localStorage)
-        .filter(k => k.startsWith('sb-') || k.includes('supabase'))
-        .forEach(k => localStorage.removeItem(k));
-      return; // continuar sin sesión, el usuario puede volver a iniciar sesión
-    }
+      const parsed = JSON.parse(raw);
+      const session = parsed?.currentSession || parsed; // según versión, puede venir directo
 
-    const { data } = result;
-    if (data.session) {
-      state.user = data.session.user;
-      await this.loadProfile();
-      renderUserNav();
+      if (session?.user) {
+        state.user = session.user;
+        await this.loadProfile();
+        renderUserNav();
+      }
+    } catch (e) {
+      console.warn('No se pudo restaurar la sesión guardada:', e);
     }
   },
 
