@@ -793,14 +793,16 @@ function closeTopicModal() {
 }
 
 function shareTopic(topicId, btn) {
-  const url = new URL(window.location.href);
-  url.search = '';
-  url.searchParams.set('tema', topicId);
+  // Apuntar a la página estática de compartir (/t/<id>.html), que tiene
+  // meta tags OG/Twitter con el título real del tema y redirige a la app.
+  // window.location.pathname para GitHub Pages es algo como "/veredikt/"
+  const base = (window.location.origin + window.location.pathname).replace(/\/$/, '');
+  const finalUrl = `${base}/t/${topicId}.html`;
 
-  const finalUrl = url.toString();
+  const title = state.openTopic?.title ? `${state.openTopic.title} — Veredikt` : 'Veredikt';
 
   if (navigator.share) {
-    navigator.share({ title: 'Veredikt', url: finalUrl }).catch(() => {});
+    navigator.share({ title, url: finalUrl }).catch(() => {});
     return;
   }
 

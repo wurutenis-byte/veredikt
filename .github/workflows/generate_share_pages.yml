@@ -1,0 +1,43 @@
+name: Generar páginas para compartir
+
+on:
+  schedule:
+    # Cada 6 horas (cubre temas nuevos de leyes/noticias y propuestas aprobadas)
+    - cron: '0 */6 * * *'
+  workflow_dispatch: {}  # permite ejecutarlo manualmente desde GitHub
+  workflow_run:
+    # Ejecutar también justo después de las importaciones diarias
+    workflows: ["Importar leyes del Congreso", "Importar noticias de actualidad"]
+    types: [completed]
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Generar páginas de compartir
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: node scripts/generate_share_pages.js
+
+      - name: Commit y push si hay cambios
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add t/
+          if git diff --staged --quiet; then
+            echo "Sin cambios en las páginas de compartir."
+          else
+            git commit -m "chore: actualizar páginas de compartir [skip ci]"
+            git push
+          fi
