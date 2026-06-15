@@ -574,8 +574,49 @@ input, textarea { font-family: var(--font-display); }
   justify-content: center; font-size: 0.7rem; font-weight: 700;
 }
 .comment-name { font-size: 0.85rem; font-weight: 600; }
-.comment-date { font-size: 0.75rem; color: var(--small); margin-left: auto; }
+.comment-date { font-size: 0.75rem; color: var(--small); }
 .comment-text { font-size: 0.9rem; color: var(--muted); line-height: 1.5; }
+.comment-report-btn {
+  font-size: 0.85rem;
+  opacity: 0.4;
+  transition: opacity var(--transition);
+  margin-left: auto;
+}
+.comment-report-btn:hover { opacity: 1; }
+.comment-report-btn:disabled { opacity: 0.6; cursor: default; }
+
+/* ─── PERFIL: HISTORIAL ──────────────────────────────────── */
+.history-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.history-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.7rem 1rem;
+  display: flex; align-items: center; gap: 0.6rem;
+  cursor: pointer;
+  transition: border-color var(--transition);
+  font-size: 0.88rem;
+}
+.history-item:hover { border-color: var(--accent); }
+.history-title {
+  flex: 1;
+  color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.history-date { font-size: 0.75rem; color: var(--small); flex-shrink: 0; }
+.history-vote-icon { font-size: 1.1rem; }
+.history-rating-badge {
+  font-family: var(--font-mono); font-weight: 700; color: var(--accent);
+  background: var(--surface2); border-radius: 6px; padding: 0.1rem 0.5rem;
+  font-size: 0.8rem; flex-shrink: 0;
+}
+.history-comment { flex-direction: column; align-items: stretch; gap: 0.3rem; }
+.history-comment .history-title { white-space: normal; font-weight: 600; }
+.history-comment-text {
+  color: var(--muted); font-size: 0.85rem; font-style: italic;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.history-empty { color: var(--small); font-size: 0.85rem; text-align: center; padding: 1rem; }
 
 /* ─── PROPOSE FORM ───────────────────────────────────────── */
 .form-group { margin-bottom: 1.1rem; }

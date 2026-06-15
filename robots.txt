@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://wurutenis-byte.github.io/veredikt/sitemap.xml

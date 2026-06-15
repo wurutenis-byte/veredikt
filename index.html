@@ -5,6 +5,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Veredikt — La opinión colectiva</title>
   <meta name="description" content="Vota, valora y comenta cualquier cosa. La opinión de todos, sobre todo.">
+
+  <!-- Open Graph / redes sociales -->
+  <meta property="og:title" content="Veredikt — La opinión colectiva sobre absolutamente todo">
+  <meta property="og:description" content="Vota 👍👎, valora del 1 al 10 y comenta cualquier tema: política, cine, gastronomía, deportes y mucho más.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://wurutenis-byte.github.io/veredikt/">
+  <meta property="og:locale" content="es_ES">
+  <meta property="og:site_name" content="Veredikt">
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Veredikt — La opinión colectiva sobre absolutamente todo">
+  <meta name="twitter:description" content="Vota, valora y comenta cualquier tema. La opinión de todos, sobre todo.">
+
   <link rel="stylesheet" href="css/style.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚖️</text></svg>">
 </head>
@@ -65,9 +79,10 @@
         <h2 id="topics-heading">Tendencia</h2>
         <div class="sort-tabs">
           <button class="sort-tab active" data-sort="trending" onclick="setSort('trending')">🔥 Tendencia</button>
+          <button class="sort-tab" data-sort="trending24h" onclick="setSort('trending24h')">⚡ Últimas 24h</button>
           <button class="sort-tab" data-sort="newest" onclick="setSort('newest')">🆕 Nuevo</button>
           <button class="sort-tab" data-sort="top" onclick="setSort('top')">⭐ Top rated</button>
-          <button class="sort-tab" data-sort="controversial" onclick="setSort('controversial')">⚡ Polémica</button>
+          <button class="sort-tab" data-sort="controversial" onclick="setSort('controversial')">💥 Polémica</button>
         </div>
       </div>
       <div class="topics-grid" id="topics-grid">
@@ -139,12 +154,33 @@
         </table>
       </div>
     </div>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;margin-top:1.5rem">
+      <div style="padding:1.2rem 1.5rem;border-bottom:1px solid var(--border)">
+        <h2 style="font-size:1rem;font-weight:600">🚩 Comentarios reportados</h2>
+      </div>
+      <div style="overflow-x:auto">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Comentario</th>
+              <th>Autor</th>
+              <th>Reportes</th>
+              <th>Acciones</th>
+            </tr>
+          </thead>
+          <tbody id="admin-reported-body">
+            <tr><td colspan="4" style="text-align:center;padding:2rem;color:var(--muted)">Cargando…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </div>
 
 <!-- PROFILE PAGE -->
 <div class="page" id="page-profile" style="display:none">
-  <div style="max-width:600px;margin:3rem auto;padding:0 2rem">
+  <div style="max-width:600px;margin:3rem auto;padding:0 2rem 4rem">
     <button class="sort-tab" onclick="showPage('home')" style="margin-bottom:1.5rem">← Volver</button>
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:2rem;text-align:center">
       <div class="user-avatar" style="width:64px;height:64px;font-size:1.4rem;margin:0 auto 1rem" id="profile-avatar"></div>
@@ -154,6 +190,20 @@
         style="margin-top:1.5rem;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:0.5rem 1.2rem;border-radius:var(--radius);font-size:0.9rem;font-weight:600;cursor:pointer">
         Cerrar sesión
       </button>
+    </div>
+
+    <!-- Historial -->
+    <div class="modal-section" style="margin-top:1.5rem">
+      <div class="modal-section-label">👍👎 Tus votos</div>
+      <div id="history-votes" class="history-list"></div>
+    </div>
+    <div class="modal-section">
+      <div class="modal-section-label">⭐ Tus valoraciones</div>
+      <div id="history-ratings" class="history-list"></div>
+    </div>
+    <div class="modal-section">
+      <div class="modal-section-label">💬 Tus comentarios</div>
+      <div id="history-comments" class="history-list"></div>
     </div>
   </div>
 </div>

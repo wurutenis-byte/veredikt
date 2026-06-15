@@ -10,6 +10,42 @@
 const SUPABASE_URL         = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
+// Opcional: si está configurada, los títulos se reescriben con Claude
+// para que sean preguntas claras de debate en lugar del titular literal.
+// Sin esta clave, el script funciona igual pero con títulos más crudos.
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
+const CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
+
+// ─── Reescribir título con Claude (opcional) ──────────────────
+async function rewriteTitleWithClaude(originalTitle) {
+  if (!ANTHROPIC_API_KEY) return null;
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: CLAUDE_MODEL,
+        max_tokens: 80,
+        messages: [{
+          role: 'user',
+          content: `Reescribe este titular de noticia como una pregunta corta y neutral para un debate de opinión (máximo 100 caracteres, en español, termina con "?"). Responde solo con la pregunta, sin comillas ni explicaciones.\n\nTitular: "${originalTitle}"`,
+        }],
+      }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const text = data?.content?.[0]?.text?.trim();
+    if (!text || text.length < 10 || text.length > 180) return null;
+    return text;
+  } catch {
+    return null;
+  }
+}
+
 // Categoría destino: "Curiosidades" (debe existir en tu tabla categories)
 const CATEGORY_NAME = 'Curiosidades';
 const SUBTOPIC = 'Actualidad del día · España';
@@ -162,7 +198,27 @@ async function main() {
     return true;
   });
 
-  console.log(`  Total noticias únicas: ${allItems.length}`);
+  // Filtrar deportes y sucesos puntuales (muertes, accidentes, crímenes)
+  // para mantener "Curiosidades" centrado en temas de debate/opinión
+  // generales, no en noticias de impacto que pueden ser delicadas.
+  const BLOCKLIST = [
+    // Deportes
+    'fútbol', 'futbol', 'liga', 'champions', 'gol ', 'goles', 'partido',
+    'real madrid', 'barcelona', 'fc barcelona', 'atlético', 'baloncesto',
+    'tenis', 'fórmula 1', 'formula 1', 'motogp', 'liga endesa', 'laliga',
+    'mundial de', 'eurocopa', 'selección española',
+    // Sucesos / tragedias puntuales
+    'muere', 'fallece', 'asesinat', 'asesina', 'homicid', 'accidente',
+    'incendio', 'detenido', 'detención', 'cadáver', 'cadaver', 'violación',
+    'agresión sexual', 'tiroteo', 'apuñala', 'secuestr',
+  ];
+
+  allItems = allItems.filter(item => {
+    const lower = item.title.toLowerCase();
+    return !BLOCKLIST.some(word => lower.includes(word));
+  });
+
+  console.log(`  Total noticias únicas (tras filtros): ${allItems.length}`);
 
   const categoryId = await getCategoryId(CATEGORY_NAME);
 
@@ -173,12 +229,16 @@ async function main() {
   const top = allItems.slice(0, MAX_TEMAS);
 
   for (const item of top) {
-    const title = buildTitle(item);
+    let title = buildTitle(item);
     if (title.length < 15) { skipped++; continue; }
 
     try {
       const exists = await topicExists(title);
       if (exists) { skipped++; continue; }
+
+      // Reescritura opcional con Claude (si ANTHROPIC_API_KEY está configurada)
+      const rewritten = await rewriteTitleWithClaude(item.title);
+      if (rewritten) title = rewritten;
 
       await createTopic({
         title,

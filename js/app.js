@@ -213,6 +213,7 @@ const api = {
   async getTopics({ category = 'all', sort = 'trending', search = '', page = 1 } = {}) {
     const sortMap = {
       trending:      'votes_up.desc',
+      trending24h:   'activity_score_24h.desc',
       newest:        'created_at.desc',
       top:           'rating_avg.desc',
       controversial: 'votes_total.desc',
@@ -220,6 +221,8 @@ const api = {
     const perPage = 20;
     const from = (page - 1) * perPage;
     const to = from + perPage - 1;
+
+    const table = sort === 'trending24h' ? 'topics_feed' : 'topics';
 
     const params = {
       select: '*,categories(name,icon)',
@@ -232,10 +235,18 @@ const api = {
     const headers = authHeaders();
     headers['Range'] = `${from}-${to}`;
 
-    const url = new URL(`${SUPABASE_URL}/rest/v1/topics`);
+    const url = new URL(`${SUPABASE_URL}/rest/v1/${table}`);
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
 
-    const res = await fetch(url.toString(), { headers });
+    let res = await fetch(url.toString(), { headers });
+    if (!res.ok && table === 'topics_feed') {
+      // Fallback si la vista no existe todavía (esquema no actualizado)
+      params.select = '*,categories(name,icon)';
+      params.order = sortMap.trending;
+      const fallbackUrl = new URL(`${SUPABASE_URL}/rest/v1/topics`);
+      for (const [k, v] of Object.entries(params)) fallbackUrl.searchParams.set(k, v);
+      res = await fetch(fallbackUrl.toString(), { headers });
+    }
     if (!res.ok) throw new Error(`Error ${res.status}`);
     return res.json();
   },
@@ -340,6 +351,65 @@ const api = {
   async deleteTopic(id) {
     await rest(`topics?id=eq.${id}`, { method: 'DELETE' });
   },
+
+  // ─── Trending 24h ─────────────────────────────────────────
+  async getTopicsTrending24h({ category = 'all', page = 1 } = {}) {
+    const perPage = 20;
+    const offset = (page - 1) * perPage;
+    const params = { limit_count: perPage, offset_count: offset };
+    if (category !== 'all') params.cat_id = category;
+
+    const ranked = await rest('rpc/get_trending_24h', { method: 'POST', body: params });
+    if (!ranked?.length) return [];
+
+    const ids = ranked.map(r => r.id);
+    const topics = await rest('topics', {
+      params: { id: `in.(${ids.join(',')})`, select: '*,categories(name,icon)' },
+    });
+
+    // Reordenar según el orden devuelto por la función (in.() no garantiza orden)
+    const byId = new Map(topics.map(t => [t.id, t]));
+    return ids.map(id => byId.get(id)).filter(Boolean);
+  },
+
+  // ─── Perfil: historial del usuario ─────────────────────────
+  async getMyVotesHistory() {
+    if (!state.user) return [];
+    return rest('votes', {
+      params: { user_id: `eq.${state.user.id}`, select: 'value,created_at,topics(id,title)', order: 'created_at.desc', limit: '50' },
+    });
+  },
+
+  async getMyRatingsHistory() {
+    if (!state.user) return [];
+    return rest('ratings', {
+      params: { user_id: `eq.${state.user.id}`, select: 'value,created_at,topics(id,title)', order: 'created_at.desc', limit: '50' },
+    });
+  },
+
+  async getMyCommentsHistory() {
+    if (!state.user) return [];
+    return rest('comments', {
+      params: { user_id: `eq.${state.user.id}`, select: 'text,created_at,topics(id,title)', order: 'created_at.desc', limit: '50' },
+    });
+  },
+
+  // ─── Reportar comentarios ───────────────────────────────────
+  async reportComment(commentId) {
+    if (!state.user) { openAuthModal(); return; }
+    await rest('comment_reports', {
+      method: 'POST',
+      body: { comment_id: commentId, user_id: state.user.id, reason: 'Reportado por usuario' },
+    });
+  },
+
+  async getReportedComments() {
+    return rest('reported_comments_summary', { params: { select: '*' } });
+  },
+
+  async deleteComment(id) {
+    await rest(`comments?id=eq.${id}`, { method: 'DELETE' });
+  },
 };
 
 // ─── RENDER HELPERS ───────────────────────────────────────────
@@ -364,6 +434,12 @@ function renderUserNav() {
   }
 }
 
+function getCategoryName(topic) {
+  if (topic.categories?.name) return topic.categories.name;
+  const cat = state.categories.find(c => c.id === topic.category_id);
+  return cat?.name || '';
+}
+
 function pctUp(topic) {
   const total = (topic.votes_up || 0) + (topic.votes_down || 0);
   return total === 0 ? 50 : Math.round((topic.votes_up / total) * 100);
@@ -382,7 +458,7 @@ function timeAgo(dateStr) {
 function renderTopicCard(topic) {
   const up = pctUp(topic);
   const rating = topic.rating_avg ? Number(topic.rating_avg).toFixed(1) : '—';
-  const catName = topic.categories?.name || '';
+  const catName = getCategoryName(topic);
   return `
     <div class="topic-card" onclick="openTopicModal('${topic.id}')">
       <div class="card-meta">
@@ -463,12 +539,21 @@ async function loadTopics(append = false) {
   else setLoadMoreLoading(true);
 
   try {
-    const topics = await api.getTopics({
-      category: state.currentCategory,
-      sort: state.currentSort,
-      search: document.getElementById('search-input')?.value || '',
-      page: state.page,
-    });
+    const search = document.getElementById('search-input')?.value || '';
+    let topics;
+    if (state.currentSort === 'trending24h' && !search) {
+      topics = await api.getTopicsTrending24h({
+        category: state.currentCategory,
+        page: state.page,
+      });
+    } else {
+      topics = await api.getTopics({
+        category: state.currentCategory,
+        sort: state.currentSort === 'trending24h' ? 'trending' : state.currentSort,
+        search,
+        page: state.page,
+      });
+    }
     const newTopics = topics || [];
 
     if (append) state.topics = [...state.topics, ...newTopics];
@@ -570,6 +655,12 @@ async function openTopicModal(topicId) {
   overlay.classList.add('open');
   document.body.style.overflow = 'hidden';
 
+  // Reflejar el tema abierto en la URL para poder compartir el enlace
+  const url = new URL(window.location.href);
+  url.search = '';
+  url.searchParams.set('tema', topicId);
+  history.replaceState(null, '', url.toString());
+
   document.getElementById('modal-content').innerHTML = `
     <div style="text-align:center;padding:3rem;color:var(--muted)">Cargando...</div>`;
 
@@ -591,7 +682,7 @@ async function openTopicModal(topicId) {
 
 function renderTopicModal(topic, comments, myVote, myRating, myComment) {
   const up = pctUp(topic);
-  const catName = topic.categories?.name || '';
+  const catName = getCategoryName(topic);
   const myRatingVal = myRating?.value || 5;
   const hasVotedUp   = myVote?.value === 'up';
   const hasVotedDown = myVote?.value === 'down';
@@ -599,7 +690,10 @@ function renderTopicModal(topic, comments, myVote, myRating, myComment) {
   document.getElementById('modal-content').innerHTML = `
     <div class="modal-header">
       <h2 class="modal-title">${topic.title}</h2>
-      <button class="modal-close" onclick="closeTopicModal()">✕</button>
+      <div style="display:flex;gap:0.5rem;align-items:flex-start">
+        <button class="modal-close" onclick="shareTopic('${topic.id}', this)" title="Copiar enlace" style="font-size:1.1rem">🔗</button>
+        <button class="modal-close" onclick="closeTopicModal()">✕</button>
+      </div>
     </div>
     <div class="modal-meta">
       <span class="card-cat-badge">${catName}</span>
@@ -675,6 +769,7 @@ function renderTopicModal(topic, comments, myVote, myRating, myComment) {
                 <div class="comment-avatar">${(c.profiles?.name || '?').slice(0,2).toUpperCase()}</div>
                 <span class="comment-name">${c.profiles?.name || 'Usuario'}</span>
                 <span class="comment-date">${timeAgo(c.created_at)}</span>
+                <button class="comment-report-btn" title="Reportar comentario" onclick="reportComment('${c.id}', this)">🚩</button>
               </div>
               <div class="comment-text">${c.text}</div>
             </div>`).join('')
@@ -688,6 +783,35 @@ function closeTopicModal() {
   overlay.classList.remove('open');
   document.body.style.overflow = '';
   state.openTopic = null;
+
+  // Limpiar el parámetro ?tema= de la URL si existe
+  const url = new URL(window.location.href);
+  if (url.searchParams.has('tema')) {
+    url.searchParams.delete('tema');
+    history.replaceState(null, '', url.toString());
+  }
+}
+
+function shareTopic(topicId, btn) {
+  const url = new URL(window.location.href);
+  url.search = '';
+  url.searchParams.set('tema', topicId);
+
+  const finalUrl = url.toString();
+
+  if (navigator.share) {
+    navigator.share({ title: 'Veredikt', url: finalUrl }).catch(() => {});
+    return;
+  }
+
+  navigator.clipboard.writeText(finalUrl).then(() => {
+    toast('Enlace copiado al portapapeles', 'success');
+    if (btn) {
+      const original = btn.textContent;
+      btn.textContent = '✅';
+      setTimeout(() => { btn.textContent = original; }, 1200);
+    }
+  }).catch(() => toast('No se pudo copiar el enlace', 'error'));
 }
 
 async function modalVote(value) {
@@ -705,6 +829,22 @@ async function modalRate() {
   await api.rate(state.openTopic.id, val);
   await openTopicModal(state.openTopic.id);
   loadTopics();
+}
+
+async function reportComment(commentId, btn) {
+  if (!state.user) { openAuthModal(); return; }
+  if (!confirm('¿Reportar este comentario por contenido inapropiado?')) return;
+  try {
+    await api.reportComment(commentId);
+    toast('Comentario reportado, gracias', 'success');
+    if (btn) { btn.textContent = '✅'; btn.disabled = true; }
+  } catch (e) {
+    if (e.message?.includes('duplicate')) {
+      toast('Ya has reportado este comentario');
+    } else {
+      toast(e.message, 'error');
+    }
+  }
 }
 
 async function modalComment() {
@@ -937,12 +1077,101 @@ async function adminDeleteTopic(id, btn) {
   }
 }
 
+// ─── ADMIN: comentarios reportados ──────────────────────────
+async function loadAdminReportedComments() {
+  const el = document.getElementById('admin-reported-body');
+  if (!el) return;
+  el.innerHTML = `<tr><td colspan="4" style="text-align:center;padding:2rem;color:var(--muted)">Cargando...</td></tr>`;
+  try {
+    const reports = await api.getReportedComments();
+    if (!reports || reports.length === 0) {
+      el.innerHTML = `<tr><td colspan="4" style="text-align:center;padding:2rem;color:var(--small)">Sin comentarios reportados ✓</td></tr>`;
+      return;
+    }
+    el.innerHTML = reports.map(r => `
+      <tr>
+        <td>${r.text}</td>
+        <td>${r.author_name || '—'}</td>
+        <td style="text-align:center">${r.reports}</td>
+        <td>
+          <button class="btn-reject" onclick="adminDeleteComment('${r.comment_id}', this)">🗑 Borrar comentario</button>
+        </td>
+      </tr>`).join('');
+  } catch (e) {
+    el.innerHTML = `<tr><td colspan="4" style="color:var(--down);padding:1rem">Error: ${e.message}</td></tr>`;
+  }
+}
+
+async function adminDeleteComment(id, btn) {
+  if (!confirm('¿Borrar este comentario permanentemente?')) return;
+  try {
+    btn.disabled = true;
+    btn.textContent = 'Borrando...';
+    await api.deleteComment(id);
+    toast('Comentario borrado', 'success');
+    btn.closest('tr').remove();
+  } catch (e) {
+    toast(e.message, 'error');
+    btn.disabled = false;
+    btn.textContent = '🗑 Borrar comentario';
+  }
+}
+
+// ─── PERFIL: historial ───────────────────────────────────────
+async function loadProfileHistory() {
+  const votesEl = document.getElementById('history-votes');
+  const ratingsEl = document.getElementById('history-ratings');
+  const commentsEl = document.getElementById('history-comments');
+  if (!votesEl) return; // sección no presente
+
+  votesEl.innerHTML = ratingsEl.innerHTML = commentsEl.innerHTML =
+    `<p style="color:var(--small);font-size:0.85rem;text-align:center;padding:1rem">Cargando...</p>`;
+
+  try {
+    const [votes, ratings, comments] = await Promise.all([
+      api.getMyVotesHistory(),
+      api.getMyRatingsHistory(),
+      api.getMyCommentsHistory(),
+    ]);
+
+    votesEl.innerHTML = votes.length ? votes.map(v => `
+      <div class="history-item" onclick="closeProfileAndOpenTopic('${v.topics?.id}')">
+        <span class="history-vote-icon">${v.value === 'up' ? '👍' : '👎'}</span>
+        <span class="history-title">${v.topics?.title || '(tema eliminado)'}</span>
+        <span class="history-date">${timeAgo(v.created_at)}</span>
+      </div>`).join('') : `<p class="history-empty">Aún no has votado en ningún tema.</p>`;
+
+    ratingsEl.innerHTML = ratings.length ? ratings.map(r => `
+      <div class="history-item" onclick="closeProfileAndOpenTopic('${r.topics?.id}')">
+        <span class="history-rating-badge">${r.value}/10</span>
+        <span class="history-title">${r.topics?.title || '(tema eliminado)'}</span>
+        <span class="history-date">${timeAgo(r.created_at)}</span>
+      </div>`).join('') : `<p class="history-empty">Aún no has valorado ningún tema.</p>`;
+
+    commentsEl.innerHTML = comments.length ? comments.map(c => `
+      <div class="history-item history-comment" onclick="closeProfileAndOpenTopic('${c.topics?.id}')">
+        <div class="history-title">${c.topics?.title || '(tema eliminado)'}</div>
+        <div class="history-comment-text">"${c.text}"</div>
+        <span class="history-date">${timeAgo(c.created_at)}</span>
+      </div>`).join('') : `<p class="history-empty">Aún no has comentado en ningún tema.</p>`;
+  } catch (e) {
+    votesEl.innerHTML = ratingsEl.innerHTML = commentsEl.innerHTML =
+      `<p style="color:var(--down);font-size:0.85rem">Error cargando historial: ${e.message}</p>`;
+  }
+}
+
+function closeProfileAndOpenTopic(topicId) {
+  if (!topicId) return;
+  showPage('home');
+  openTopicModal(topicId);
+}
+
 function showPage(page) {
   document.querySelectorAll('.page').forEach(p => p.style.display = 'none');
   const el = document.getElementById(`page-${page}`);
   if (el) {
     el.style.display = 'block';
-    if (page === 'admin') { loadAdminPanel(); loadAdminPublished(); }
+    if (page === 'admin') { loadAdminPanel(); loadAdminPublished(); loadAdminReportedComments(); }
     if (page === 'profile' && state.user) {
       const name = state.profile?.name || 'Sin nombre';
       const initials = name.slice(0, 2).toUpperCase();
@@ -952,6 +1181,7 @@ function showPage(page) {
       if (avatarEl) avatarEl.textContent = initials;
       if (nameEl)  nameEl.textContent  = name;
       if (emailEl) emailEl.textContent = state.user.email || '';
+      loadProfileHistory();
     }
   }
   document.getElementById('user-menu')?.classList.remove('open');
@@ -978,6 +1208,12 @@ async function init() {
   renderUserNav();
   await loadCategories();
   await loadTopics();
+
+  // Si la URL incluye ?tema=ID, abrir ese tema automáticamente
+  const sharedTopicId = new URLSearchParams(window.location.search).get('tema');
+  if (sharedTopicId) {
+    openTopicModal(sharedTopicId);
+  }
 
   document.addEventListener('keydown', e => {
     if (e.key === '/' && !e.target.matches('input,textarea')) {
