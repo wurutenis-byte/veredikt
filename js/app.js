@@ -372,6 +372,26 @@ const api = {
     return ids.map(id => byId.get(id)).filter(Boolean);
   },
 
+  // ─── Tendencia con decaimiento temporal (score estilo HN/Reddit) ──
+  async getTopicsTrendingScore({ category = 'all', page = 1, search = '' } = {}) {
+    const perPage = 20;
+    const offset = (page - 1) * perPage;
+    const body = { limit_count: perPage, offset_count: offset };
+    if (category !== 'all') body.cat_id = category;
+    if (search) body.search_term = search;
+
+    const data = await rest('rpc/get_trending_score', { method: 'POST', body });
+    if (!data?.length) return [];
+
+    // La función ya devuelve los campos completos del topic + score
+    // Necesitamos añadir el embed de categorías manualmente
+    const catMap = new Map(state.categories.map(c => [c.id, c]));
+    return data.map(t => ({
+      ...t,
+      categories: catMap.get(t.category_id) || null,
+    }));
+  },
+
   // ─── Perfil: historial del usuario ─────────────────────────
   async getMyVotesHistory() {
     if (!state.user) return [];
@@ -541,7 +561,14 @@ async function loadTopics(append = false) {
   try {
     const search = document.getElementById('search-input')?.value || '';
     let topics;
-    if (state.currentSort === 'trending24h' && !search) {
+    if (state.currentSort === 'trending') {
+      // Algoritmo de tendencia con decaimiento temporal (estilo HN/Reddit)
+      topics = await api.getTopicsTrendingScore({
+        category: state.currentCategory,
+        page: state.page,
+        search,
+      });
+    } else if (state.currentSort === 'trending24h' && !search) {
       topics = await api.getTopicsTrending24h({
         category: state.currentCategory,
         page: state.page,
@@ -549,7 +576,7 @@ async function loadTopics(append = false) {
     } else {
       topics = await api.getTopics({
         category: state.currentCategory,
-        sort: state.currentSort === 'trending24h' ? 'trending' : state.currentSort,
+        sort: state.currentSort === 'trending24h' ? 'newest' : state.currentSort,
         search,
         page: state.page,
       });
