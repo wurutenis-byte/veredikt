@@ -953,6 +953,22 @@ function filterCategory(catId, event) {
   if (event) event.preventDefault();
   state.currentCategory = catId;
   state.page = 1;
+
+  // Al seleccionar Curiosidades, ordenar por "Nuevo" automáticamente
+  // para que las noticias diarias aparezcan siempre al principio.
+  // Al salir de Curiosidades, volver a "Tendencia".
+  const curioName = state.categories.find(c => c.name === 'Curiosidades')?.id;
+  if (catId === curioName) {
+    state.currentSort = 'newest';
+  } else if (state.currentSort === 'newest' && catId !== curioName) {
+    state.currentSort = 'trending';
+  }
+
+  // Actualizar UI de los tabs de ordenación
+  document.querySelectorAll('.sort-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.sort === state.currentSort);
+  });
+
   document.querySelectorAll('.cat-item a').forEach(a => a.classList.remove('active'));
   if (event?.target) event.target.closest('a').classList.add('active');
   loadTopics();
